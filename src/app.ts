@@ -20,6 +20,7 @@ import { ZodError } from "zod";
 import settingsRoute from "./routes/settings.routes.js";
 import reportRoutes from "./routes/report.routes.js";
 import easterEggRoutes from "./routes/easteregg.routes.js";
+import { internalAnalyticsRoutes } from "./analytics/analytics.routes.js";
 
 export const server = Fastify({ logger: true });
 
@@ -150,6 +151,9 @@ async function main() {
     authenticated.register(equipmentsRoutes, { prefix: "/api/equipments" });
     authenticated.register(settingsRoute, { prefix: "/api/settings" });
     authenticated.register(reportRoutes, { prefix: "/api/reports" });
+    authenticated.register(internalAnalyticsRoutes, {
+      prefix: "/api/v1/internal/analytics",
+    });
   });
 
   try {

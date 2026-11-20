@@ -1,4 +1,6 @@
 import type { BatchStatus } from "../generated/prisma/enums.js";
+import type { Prisma } from "../generated/prisma/client.js";
+
 import {
   badRequest,
   conflict,
@@ -134,7 +136,16 @@ export async function updateBatchByStatus(
     throw badRequest(`Não é possível mudar de ${batch.status} para ${status}`);
   }
 
-  const count = await updateBatchStatus(id, version, status, updatedBy);
+  const now = new Date();
+  const extra: Prisma.BatchUncheckedUpdateManyInput =
+    status === "EM_TRIAGEM"
+      ? { triageStartedAt: now, triageOperatorId: updatedBy }
+      : status === "TRIAGEM_CONCLUIDA"
+        ? { triageCompletedAt: now }
+        : {};
+
+  const count = await updateBatchStatus(id, version, status, updatedBy, extra);
+
   if (count === 0)
     throw conflict("Lote foi alterado por outra pessoa. Recarregue os dados.");
 

@@ -25,6 +25,9 @@ export const publicBatchSelect = {
   updatedAt: true,
   version: true,
   active: true,
+  triageStartedAt: true,
+  triageCompletedAt: true,
+  triageOperator: { select: { id: true, username: true } },
 } satisfies Prisma.BatchSelect;
 
 export const batchListSelect = {
@@ -95,10 +98,11 @@ export async function updateBatchStatus(
   version: number,
   status: BatchStatus,
   updatedById: string,
+  extra: Prisma.BatchUncheckedUpdateManyInput = {},
 ) {
   const result = await prisma.batch.updateMany({
     where: { id, version },
-    data: { status, version: { increment: 1 }, updatedById },
+    data: { ...extra, status, version: { increment: 1 }, updatedById },
   });
   return result.count;
 }
