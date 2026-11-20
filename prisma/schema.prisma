@@ -64,6 +64,23 @@ enum PhysicalState {
   @@map("estado_fisico")
 }
 
+enum ReportType {
+  EFICIENCIA
+  RENTABILIDADE
+  VIDA_UTIL
+
+  @@map("tipo_relatorio")
+}
+
+enum JobStatus {
+  NA_FILA
+  PROCESSANDO
+  CONCLUIDO
+  FALHOU
+
+  @@map("status_tarefa")
+}
+
 model User {
   id           String   @id @default(uuid()) @map("us_cod") @db.Uuid
   username     String   @map("us_nome")
@@ -91,6 +108,8 @@ model User {
   updatedBatches       Batch[]         @relation("BatchUpdatedBy")
   createdEquipments    Equipment[]     @relation("EquipmentCreatedBy")
   updatedEquipments    Equipment[]     @relation("EquipmentUpdatedBy")
+  triageBatches   Batch[]  @relation("BatchTriageOperator")
+  createdApiKeys  ApiKey[] @relation("ApiKeyCreatedBy")
   movements            Movement[]
   settings             SystemSetting[]
 
@@ -118,6 +137,7 @@ model Organization {
   active            Boolean  @default(true) @map("org_ativo")
   version           Int      @default(0) @map("org_versao_otimista")
 
+    apiKeys ApiKey[]
   createdBy User      @relation("OrganizationCreatedBy", fields: [createdById], references: [id])
   updatedBy User?     @relation("OrganizationUpdatedBy", fields: [updatedById], references: [id])
   contract  Contract?
@@ -161,14 +181,22 @@ model Batch {
   createdAt   DateTime    @default(now()) @map("lote_criado_em")
   updatedById String?     @map("lote_atualizado_por") @db.Uuid
   updatedAt   DateTime    @updatedAt @map("lote_atualizado_em")
+  triageStartedAt   DateTime? @map("lote_triagem_inicio")
+  triageCompletedAt DateTime? @map("lote_triagem_conclusao")
+  triageOperatorId  String?   @map("lote_operador_triagem") @db.Uuid
   active      Boolean     @default(true) @map("lote_ativo")
   version     Int         @default(0) @map("lote_versao_otimista")
+  
+
+
 
   org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   createdBy  User         @relation("BatchCreatedBy", fields: [createdById], references: [id])
   updatedBy  User?        @relation("BatchUpdatedBy", fields: [updatedById], references: [id])
   equipments Equipment[]
+  triageOperator User? @relation("BatchTriageOperator", fields: [triageOperatorId], references: [id])
 
+  @@index([triageCompletedAt])
   @@index([orgId])
   @@index([createdById])
   @@map("lote")
@@ -187,15 +215,18 @@ model Equipment {
   status            TrackingStatus @default(AGUARDANDO_TRIAGEM) @map("equi_status")
   createdById       String         @map("equi_criado_por") @db.Uuid
   createdAt         DateTime       @default(now()) @map("equi_criado_em")
+  estimatedValue Decimal? @map("equi_valor_recuperacao") @db.Decimal(12, 2)
   updatedById       String?        @map("equi_atualizado_por") @db.Uuid
   updatedAt         DateTime       @updatedAt @map("equi_atualizado_em")
   version           Int            @default(0) @map("equi_versao_otimista")
+
 
   createdBy User       @relation("EquipmentCreatedBy", fields: [createdById], references: [id])
   updatedBy User?      @relation("EquipmentUpdatedBy", fields: [updatedById], references: [id])
   batch     Batch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
   movements Movement[]
 
+@@index([type, physicalState])
   @@unique([batchId, batchPosition])
   @@index([createdById])
   @@index([batchId])
@@ -235,4 +266,73 @@ model SystemSetting {
   updatedBy User @relation(fields: [updatedById], references: [id])
 
   @@map("configuracoes_sistema")
+}
+
+model AnalyticsReport {
+  id           String     @id @default(uuid()) @map("rel_cod") @db.Uuid
+  type         ReportType @map("rel_tipo")
+  params       Json?      @map("rel_parametros")
+  result       Json       @map("rel_resultado")
+  modelVersion String     @default("v1") @map("rel_versao_modelo")
+  generatedAt  DateTime   @default(now()) @map("rel_gerado_em")
+
+  @@index([type, generatedAt])
+  @@map("relatorio_analitico")
+}
+
+model Prediction {
+  id                     String        @id @default(uuid()) @map("prev_cod") @db.Uuid
+  equipmentType          EquipmentType @map("prev_tipo_equipamento")
+  predictedLifespanYears Float         @map("prev_vida_util_anos")
+  slope                  Float         @map("prev_coef_angular")
+  intercept              Float         @map("prev_coef_linear")
+  r2                     Float         @map("prev_r2")
+  sampleSize             Int           @map("prev_amostra")
+  actualLifespanYears    Float?        @map("prev_vida_util_real")
+  errorYears             Float?        @map("prev_erro_anos")
+  evaluatedAt            DateTime?     @map("prev_avaliada_em")
+  createdAt              DateTime      @default(now()) @map("prev_criado_em")
+
+  @@index([equipmentType, createdAt])
+  @@map("previsao_vida_util")
+}
+
+model ApiKey {
+  id              String    @id @default(uuid()) @map("chave_cod") @db.Uuid
+  orgId           String    @map("chave_org_cod") @db.Uuid
+  name            String    @map("chave_nome")
+  prefix          String    @unique @map("chave_prefixo")
+  keyHash         String    @map("chave_hash")
+  scopes          String[]  @map("chave_permissoes")
+  rateLimitPerMin Int       @default(60) @map("chave_limite_por_minuto")
+  active          Boolean   @default(true) @map("chave_ativa")
+  expiresAt       DateTime? @map("chave_expira_em")
+  lastUsedAt      DateTime? @map("chave_ultimo_uso")
+  createdById     String    @map("chave_criado_por") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("chave_criado_em")
+
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy User         @relation("ApiKeyCreatedBy", fields: [createdById], references: [id])
+  jobs      ReportJob[]
+
+  @@index([orgId])
+  @@map("chave_api")
+}
+
+model ReportJob {
+  id         String     @id @default(uuid()) @map("tar_cod") @db.Uuid
+  apiKeyId   String?    @map("tar_chave_cod") @db.Uuid
+  type       ReportType @map("tar_tipo")
+  status     JobStatus  @default(NA_FILA) @map("tar_status")
+  params     Json?      @map("tar_parametros")
+  filePath   String?    @map("tar_arquivo")
+  error      String?    @map("tar_erro")
+  attempts   Int        @default(0) @map("tar_tentativas")
+  createdAt  DateTime   @default(now()) @map("tar_criado_em")
+  finishedAt DateTime?  @map("tar_finalizado_em")
+
+  apiKey ApiKey? @relation(fields: [apiKeyId], references: [id])
+
+  @@index([apiKeyId])
+  @@map("tarefa_relatorio")
 }

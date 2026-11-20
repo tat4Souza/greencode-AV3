@@ -24,6 +24,36 @@ const USER_PASSWORD = process.env["SEED_USER_PASSWORD"] ?? "Demo@1234";
 const DAY = 24 * 60 * 60 * 1000;
 const daysAgo = (n: number) => new Date(Date.now() - n * DAY);
 const daysAhead = (n: number) => new Date(Date.now() + n * DAY);
+const CURRENT_YEAR = new Date().getFullYear();
+
+// ---------------------------------------------------------------------------
+// Aleatoriedade determinística: rodar o seed duas vezes gera os mesmos dados
+// ---------------------------------------------------------------------------
+function mulberry32(seed: number) {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rand = mulberry32(2026);
+const pick = <T>(arr: readonly T[]): T =>
+  arr[Math.floor(rand() * arr.length)] as T;
+
+// ---------------------------------------------------------------------------
+// Tipos
+// ---------------------------------------------------------------------------
+type OperatorKey = "OPERADOR" | "OPERADOR2" | "OPERADOR3";
+type UserMap = Record<string, { id: string }>;
+
+const idOf = (users: UserMap, key: string): string => {
+  const u = users[key];
+  if (!u) throw new Error(`Usuário ${key} não encontrado no seed`);
+  return u.id;
+};
 
 const TRIAGEM: TrackingStatus[] = ["EM_TRIAGEM"];
 const DESMONTE: TrackingStatus[] = [
@@ -65,6 +95,12 @@ type MovementSeed = {
   justification?: string;
 };
 
+type TriageSeed = {
+  operator: OperatorKey;
+  startOffsetDays: number; // dias após a entrada do lote
+  durationDays?: number; // sem valor = triagem ainda em andamento
+};
+
 type BatchSeed = {
   invoice: string;
   carrier: string;
@@ -72,43 +108,265 @@ type BatchSeed = {
   enteredDaysAgo: number;
   obs?: string;
   deactivate?: boolean;
+  triage?: TriageSeed;
   equipments: EquipmentSeed[];
 };
 
-async function seedUsers() {
-  const roles: { role: Role; username: string; email: string; pass: string }[] =
-    [
-      {
-        role: "ADMIN",
-        username: "Administrador",
-        email: ADMIN_EMAIL,
-        pass: ADMIN_PASSWORD,
-      },
-      {
-        role: "OPERADOR",
-        username: "Olívia Operadora",
-        email: "operador@greencode.com",
-        pass: USER_PASSWORD,
-      },
-      {
-        role: "GESTOR",
-        username: "Gabriel Gestor",
-        email: "gestor@greencode.com",
-        pass: USER_PASSWORD,
-      },
-      {
-        role: "AUDITOR",
-        username: "Alice Auditora",
-        email: "auditor@greencode.com",
-        pass: USER_PASSWORD,
-      },
-    ];
+// ---------------------------------------------------------------------------
+// Valor estimado de recuperação (rentabilidade)
+// ---------------------------------------------------------------------------
+const BASE_VALUE: Record<EquipmentType, number> = {
+  COMPUTADOR_MESA: 450,
+  NOTEBOOK: 600,
+  MONITOR: 200,
+  IMPRESSORA: 150,
+  SERVIDOR: 1500,
+  ROTEADOR: 80,
+  CABO_ESTRUTURADO: 60,
+  FONTE_ALIMENTACAO: 70,
+};
 
-  const users: Record<string, { id: string }> = {};
+const STATE_FACTOR: Record<PhysicalState, number> = {
+  NOVO: 1,
+  BOM_ESTADO: 0.8,
+  USADO_LEVE: 0.65,
+  USADO_MODERADO: 0.5,
+  DANIFICADO_LEVE: 0.3,
+  DANIFICADO_GRAVE: 0.15,
+  INSERVIVEL: 0.05,
+};
 
-  for (const u of roles) {
+const PREMIUM_BRANDS = new Set(["Dell", "HP", "HPE", "Lenovo", "Cisco", "IBM"]);
+
+function estimateValue(
+  e: Pick<EquipmentSeed, "type" | "brand" | "year" | "state">,
+): number {
+  const age = Math.max(0, CURRENT_YEAR - e.year);
+  const ageFactor = Math.max(0.5, 1 - age * 0.02);
+  const brandFactor = PREMIUM_BRANDS.has(e.brand) ? 1.15 : 1;
+  const noise = 0.92 + rand() * 0.16; // variação de ±8%
+  const value =
+    BASE_VALUE[e.type] *
+    STATE_FACTOR[e.state] *
+    ageFactor *
+    brandFactor *
+    noise;
+  return Math.round(value * 100) / 100;
+}
+
+// ---------------------------------------------------------------------------
+// Histórico gerado (eficiência por operador/mês e vida útil por tipo)
+// ---------------------------------------------------------------------------
+// nota 0..6 -> estado físico (6 = NOVO, 0 = INSERVIVEL)
+const STATES_BY_SCORE: readonly PhysicalState[] = [
+  "INSERVIVEL",
+  "DANIFICADO_GRAVE",
+  "DANIFICADO_LEVE",
+  "USADO_MODERADO",
+  "USADO_LEVE",
+  "BOM_ESTADO",
+  "NOVO",
+];
+
+// k = perda de "nota" por ano; vida útil teórica = 6 / k anos
+const LIFESPAN_PROFILES: {
+  type: EquipmentType;
+  k: number;
+  maxAge: number;
+  items: { brand: string; model: string; weight: number }[];
+}[] = [
+  {
+    type: "NOTEBOOK",
+    k: 0.6,
+    maxAge: 11,
+    items: [
+      { brand: "Dell", model: "Latitude 5420", weight: 1.65 },
+      { brand: "Lenovo", model: "ThinkPad T480", weight: 1.9 },
+      { brand: "Acer", model: "Aspire 5", weight: 2.1 },
+    ],
+  },
+  {
+    type: "COMPUTADOR_MESA",
+    k: 0.5,
+    maxAge: 13,
+    items: [
+      { brand: "HP", model: "ProDesk 400", weight: 6.8 },
+      { brand: "Dell", model: "OptiPlex 3010", weight: 8.0 },
+      { brand: "Positivo", model: "Master D3400", weight: 7.2 },
+    ],
+  },
+  {
+    type: "MONITOR",
+    k: 0.45,
+    maxAge: 14,
+    items: [
+      { brand: "LG", model: "24MK430H", weight: 3.2 },
+      { brand: "Samsung", model: "S22F350", weight: 3.6 },
+      { brand: "Dell", model: "P2419H", weight: 3.8 },
+    ],
+  },
+  {
+    type: "IMPRESSORA",
+    k: 0.7,
+    maxAge: 9,
+    items: [
+      { brand: "Epson", model: "L3150", weight: 4.1 },
+      { brand: "HP", model: "LaserJet P1102", weight: 5.3 },
+      { brand: "Brother", model: "HL-1202", weight: 4.6 },
+    ],
+  },
+  {
+    type: "SERVIDOR",
+    k: 0.55,
+    maxAge: 12,
+    items: [
+      { brand: "Dell", model: "PowerEdge R340", weight: 14.5 },
+      { brand: "HPE", model: "ProLiant DL360", weight: 16.8 },
+      { brand: "IBM", model: "System x3550", weight: 15.2 },
+    ],
+  },
+];
+
+// dias médios de triagem por operador (para a comparação de eficiência)
+const BASE_TRIAGE_DAYS: Record<OperatorKey, number> = {
+  OPERADOR: 2.5,
+  OPERADOR2: 4,
+  OPERADOR3: 6,
+};
+const OPERATORS: OperatorKey[] = ["OPERADOR", "OPERADOR2", "OPERADOR3"];
+
+function statusFor(state: PhysicalState): TrackingStatus {
+  if (state === "INSERVIVEL") return "BAIXA_DEFINITIVA";
+  if (state === "DANIFICADO_GRAVE")
+    return pick(["PECAS_REAPROVEITADAS", "DESCARTE_SEGURO"] as const);
+  return pick(["PECAS_REAPROVEITADAS", "MATERIAL_RECICLAVEL"] as const);
+}
+
+// 12 lotes x 5 equipamentos = 60 equipamentos (12 de cada tipo)
+function buildHistoricalBatches(): { orgSlot: number; batch: BatchSeed }[] {
+  const result: { orgSlot: number; batch: BatchSeed }[] = [];
+
+  for (let i = 0; i < 12; i++) {
+    // o banco rejeita lotes com entrada anterior a 90 dias: ficamos em <= 74
+    const enteredDaysAgo = 6 + i * 6 + Math.floor(rand() * 3);
+
+    // período mais antigo foi o mais movimentado (triagem mais lenta)
+    const seasonal =
+      enteredDaysAgo >= 50 ? 1.6 : enteredDaysAgo >= 30 ? 1.2 : 1;
+
+    const operator = OPERATORS[i % 3] as OperatorKey;
+    const durationDays =
+      Math.round(
+        BASE_TRIAGE_DAYS[operator] * seasonal * (0.8 + rand() * 0.4) * 10,
+      ) / 10;
+
+    const equipments: EquipmentSeed[] = LIFESPAN_PROFILES.map((p) => {
+      const age = 1 + Math.floor(rand() * p.maxAge);
+      const score = 6 - age * p.k + (rand() - 0.5) * 1.2;
+      const idx = Math.min(6, Math.max(0, Math.round(score)));
+      const state = STATES_BY_SCORE[idx] as PhysicalState;
+      const item = pick(p.items);
+
+      const equipment: EquipmentSeed = {
+        type: p.type,
+        brand: item.brand,
+        model: item.model,
+        year: CURRENT_YEAR - age,
+        state,
+        weight: item.weight,
+        status: statusFor(state),
+      };
+      if (state === "INSERVIVEL") {
+        equipment.drop = {
+          from: "DANIFICADO_GRAVE",
+          justification: "Falha no componente principal, sem reparo viável",
+        };
+      }
+      return equipment;
+    });
+
+    result.push({
+      orgSlot: i % 4,
+      batch: {
+        invoice: `NF-HIST-${String(i + 1).padStart(3, "0")}`,
+        carrier: i % 2 === 0 ? "TransVerde Logística" : "Rápido Express",
+        status:
+          i === 0
+            ? "TRIAGEM_CONCLUIDA"
+            : i === 1
+              ? "ENCAMINHADO"
+              : "FINALIZADO",
+        enteredDaysAgo,
+        obs: "Lote histórico gerado pelo seed",
+        triage: { operator, startOffsetDays: 0.5 + rand() * 0.5, durationDays },
+        equipments,
+      },
+    });
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Seeds
+// ---------------------------------------------------------------------------
+async function seedUsers(): Promise<UserMap> {
+  const list: {
+    key: string;
+    role: Role;
+    username: string;
+    email: string;
+    pass: string;
+  }[] = [
+    {
+      key: "ADMIN",
+      role: "ADMIN",
+      username: "Administrador",
+      email: ADMIN_EMAIL,
+      pass: ADMIN_PASSWORD,
+    },
+    {
+      key: "OPERADOR",
+      role: "OPERADOR",
+      username: "Olívia Operadora",
+      email: "operador@greencode.com",
+      pass: USER_PASSWORD,
+    },
+    {
+      key: "OPERADOR2",
+      role: "OPERADOR",
+      username: "Otávio Operador",
+      email: "operador2@greencode.com",
+      pass: USER_PASSWORD,
+    },
+    {
+      key: "OPERADOR3",
+      role: "OPERADOR",
+      username: "Paula Operadora",
+      email: "operador3@greencode.com",
+      pass: USER_PASSWORD,
+    },
+    {
+      key: "GESTOR",
+      role: "GESTOR",
+      username: "Gabriel Gestor",
+      email: "gestor@greencode.com",
+      pass: USER_PASSWORD,
+    },
+    {
+      key: "AUDITOR",
+      role: "AUDITOR",
+      username: "Alice Auditora",
+      email: "auditor@greencode.com",
+      pass: USER_PASSWORD,
+    },
+  ];
+
+  const users: UserMap = {};
+
+  for (const u of list) {
     const admin = users["ADMIN"];
-    users[u.role] = await prisma.user.upsert({
+    users[u.key] = await prisma.user.upsert({
       where: { email: u.email },
       update: {},
       create: {
@@ -122,7 +380,7 @@ async function seedUsers() {
     });
   }
 
-  return users as Record<Role, { id: string }>;
+  return users;
 }
 
 async function seedSettings(adminId: string) {
@@ -194,9 +452,20 @@ async function seedBatch(
   orgId: string,
   b: BatchSeed,
   creatorId: string,
-  performerId: string,
+  users: UserMap,
 ) {
   const enteredAt = daysAgo(b.enteredDaysAgo);
+
+  const triageOperatorId = b.triage ? idOf(users, b.triage.operator) : null;
+  const performerId = triageOperatorId ?? creatorId;
+
+  const triageStartedAt = b.triage
+    ? new Date(enteredAt.getTime() + b.triage.startOffsetDays * DAY)
+    : null;
+  const triageCompletedAt =
+    triageStartedAt && b.triage?.durationDays !== undefined
+      ? new Date(triageStartedAt.getTime() + b.triage.durationDays * DAY)
+      : null;
 
   const batch = await prisma.batch.create({
     data: {
@@ -207,9 +476,14 @@ async function seedBatch(
       status: b.status,
       obs: b.obs,
       createdById: creatorId,
+      triageStartedAt,
+      triageCompletedAt,
+      triageOperatorId,
     },
     select: { id: true },
   });
+
+  const movementBase = triageStartedAt ?? enteredAt;
 
   for (const [index, e] of b.equipments.entries()) {
     const steps = PATH[e.status];
@@ -223,7 +497,7 @@ async function seedBatch(
         toStatus: to,
         performedById: performerId,
         performedAt: new Date(
-          enteredAt.getTime() + (i + 1) * 6 * 60 * 60 * 1000,
+          movementBase.getTime() + (i + 1) * 6 * 60 * 60 * 1000,
         ),
       };
       from = to;
@@ -238,7 +512,7 @@ async function seedBatch(
         toStatus: e.status,
         performedById: performerId,
         performedAt: new Date(
-          enteredAt.getTime() + (movements.length + 1) * 6 * 60 * 60 * 1000,
+          movementBase.getTime() + (movements.length + 1) * 6 * 60 * 60 * 1000,
         ),
         fromPhysicalState: e.drop.from,
         toPhysicalState: e.state,
@@ -258,6 +532,9 @@ async function seedBatch(
         status: e.status,
         batchPosition: index + 1,
         createdById: creatorId,
+        // só tem valor estimado quem já passou pela triagem
+        estimatedValue:
+          e.status === "AGUARDANDO_TRIAGEM" ? null : estimateValue(e),
         version: movements.length,
         movements: { create: movements },
       },
@@ -278,9 +555,9 @@ async function seedBatch(
 
 async function main() {
   const users = await seedUsers();
-  const adminId = users.ADMIN.id;
-  const operadorId = users.OPERADOR.id;
-  const gestorId = users.GESTOR.id;
+  const adminId = idOf(users, "ADMIN");
+  const operadorId = idOf(users, "OPERADOR");
+  const gestorId = idOf(users, "GESTOR");
 
   await seedSettings(adminId);
 
@@ -302,7 +579,7 @@ async function main() {
     contract: { signedDaysAgo: 400, expiresInDays: -30, value: 4200.5 },
   });
 
-  await seedOrganization(operadorId, {
+  const orgVerde = await seedOrganization(operadorId, {
     name: "Verde Hardware ME",
     cnpj: "45723174000110",
     email: "oi@verdehardware.com.br",
@@ -319,8 +596,9 @@ async function main() {
     contract: { signedDaysAgo: 200, expiresInDays: 165, value: 12000 },
   });
 
+  // limpa os lotes das organizações do seed para poder rodar várias vezes
   await prisma.batch.deleteMany({
-    where: { orgId: { in: [orgValida, orgVencida, orgInativa] } },
+    where: { orgId: { in: [orgValida, orgVencida, orgVerde, orgInativa] } },
   });
 
   const lotes: { orgId: string; batch: BatchSeed }[] = [
@@ -370,6 +648,7 @@ async function main() {
         carrier: "TransVerde Logística",
         status: "EM_TRIAGEM",
         enteredDaysAgo: 12,
+        triage: { operator: "OPERADOR", startOffsetDays: 1 }, // em andamento
         equipments: [
           {
             type: "SERVIDOR",
@@ -422,6 +701,11 @@ async function main() {
         carrier: "Rápido Express",
         status: "TRIAGEM_CONCLUIDA",
         enteredDaysAgo: 25,
+        triage: {
+          operator: "OPERADOR2",
+          startOffsetDays: 1,
+          durationDays: 3.5,
+        },
         equipments: [
           {
             type: "COMPUTADOR_MESA",
@@ -465,6 +749,7 @@ async function main() {
         status: "ENCAMINHADO",
         enteredDaysAgo: 45,
         obs: "Encaminhado para a recicladora parceira",
+        triage: { operator: "OPERADOR3", startOffsetDays: 1, durationDays: 6 },
         equipments: [
           {
             type: "NOTEBOOK",
@@ -504,6 +789,7 @@ async function main() {
         status: "FINALIZADO",
         enteredDaysAgo: 80,
         obs: "Lote concluído (contrato da organização já vencido)",
+        triage: { operator: "OPERADOR", startOffsetDays: 1, durationDays: 2.5 },
         equipments: [
           {
             type: "IMPRESSORA",
@@ -563,8 +849,14 @@ async function main() {
     },
   ];
 
+  // histórico gerado: dá massa de dados às três análises
+  const orgSlots = [orgValida, orgValida, orgVencida, orgVerde];
+  for (const { orgSlot, batch } of buildHistoricalBatches()) {
+    lotes.push({ orgId: orgSlots[orgSlot] as string, batch });
+  }
+
   for (const { orgId, batch } of lotes) {
-    await seedBatch(orgId, batch, gestorId, gestorId);
+    await seedBatch(orgId, batch, gestorId, users);
   }
 
   await prisma.organization.update({
@@ -572,17 +864,22 @@ async function main() {
     data: { active: false, version: { increment: 1 }, updatedById: adminId },
   });
 
-  const [orgs, batches, equipments, movements] = await Promise.all([
-    prisma.organization.count(),
-    prisma.batch.count(),
-    prisma.equipment.count(),
-    prisma.movement.count(),
-  ]);
+  const [orgs, batches, equipments, movements, withValue, triaged] =
+    await Promise.all([
+      prisma.organization.count(),
+      prisma.batch.count(),
+      prisma.equipment.count(),
+      prisma.movement.count(),
+      prisma.equipment.count({ where: { estimatedValue: { not: null } } }),
+      prisma.batch.count({ where: { triageCompletedAt: { not: null } } }),
+    ]);
 
   console.log("Seed concluído:");
-  console.log(`  usuários: ADMIN, OPERADOR, GESTOR, AUDITOR`);
   console.log(
-    `  ${orgs} organizações, ${batches} lotes, ${equipments} equipamentos, ${movements} movimentações`,
+    `  usuários: ADMIN, 3 OPERADORES, GESTOR, AUDITOR (senha demo: ${USER_PASSWORD})`,
+  );
+  console.log(
+    `  ${orgs} organizações, ${batches} lotes (${triaged} com triagem concluída), ${equipments} equipamentos (${withValue} com valor estimado), ${movements} movimentações`,
   );
   console.log(`  login admin: ${ADMIN_EMAIL}`);
 }
