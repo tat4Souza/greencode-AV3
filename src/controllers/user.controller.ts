@@ -1,0 +1,98 @@
+import type { FastifyReply, FastifyRequest } from "fastify";
+import {
+  deactivateUserById,
+  deleteUserById,
+  getUserById,
+  getUsers,
+  reactivateUserById,
+  registerUser,
+  updateUserById,
+} from "../services/user.service.js";
+import type {
+  CreateUserInput,
+  ListUsersQuery,
+  UpdateUserInput,
+} from "../schemas/user.schema.js";
+import { forbidden } from "../lib/errors.js";
+import type { IdParamsSchema, VersionBody } from "../schemas/common.schema.js";
+
+export async function registerUserHandler(
+  request: FastifyRequest<{
+    Body: CreateUserInput;
+  }>,
+  reply: FastifyReply,
+) {
+  const user = await registerUser(request.body, request.user.id);
+  return reply.code(201).send(user);
+}
+
+export async function getUsersHandler(
+  request: FastifyRequest<{ Querystring: ListUsersQuery }>,
+  reply: FastifyReply,
+) {
+  const { role, active } = request.query;
+  const users = await getUsers(role, active);
+
+  return reply.send(users);
+}
+
+export async function getUserByIdHandler(
+  request: FastifyRequest<{ Params: IdParamsSchema }>,
+  reply: FastifyReply,
+) {
+  const user = await getUserById(request.params.id);
+
+  return reply.send(user);
+}
+
+export async function updateUserHandler(
+  request: FastifyRequest<{ Params: IdParamsSchema; Body: UpdateUserInput }>,
+  reply: FastifyReply,
+) {
+  const user = await updateUserById(
+    request.params.id,
+    request.body,
+    request.user.id,
+  );
+
+  return reply.send(user);
+}
+
+export async function deleteUserHandler(
+  request: FastifyRequest<{ Params: IdParamsSchema }>,
+  reply: FastifyReply,
+) {
+  if (request.user.id === request.params.id) {
+    throw forbidden("Você não pode deletar a si mesmo");
+  }
+  await deleteUserById(request.params.id);
+  return reply.code(204).send();
+}
+
+export async function deactivateUserHandler(
+  request: FastifyRequest<{ Params: IdParamsSchema; Body: VersionBody }>,
+  reply: FastifyReply,
+) {
+  if (request.user.id === request.params.id) {
+    throw forbidden("Você não pode inativar a si mesmo");
+  }
+
+  await deactivateUserById(
+    request.params.id,
+    request.body.version,
+    request.user.id,
+  );
+  return reply.code(204).send();
+}
+
+export async function reactivateUserHandler(
+  request: FastifyRequest<{ Params: IdParamsSchema; Body: VersionBody }>,
+  reply: FastifyReply,
+) {
+  await reactivateUserById(
+    request.params.id,
+    request.body.version,
+    request.user.id,
+  );
+  return reply.code(204).send();
+}
