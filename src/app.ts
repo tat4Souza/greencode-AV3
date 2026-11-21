@@ -1,4 +1,5 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import type { ScheduledTask } from "node-cron";
 import fjwt from "@fastify/jwt";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
@@ -21,6 +22,9 @@ import settingsRoute from "./routes/settings.routes.js";
 import reportRoutes from "./routes/report.routes.js";
 import easterEggRoutes from "./routes/easteregg.routes.js";
 import { internalAnalyticsRoutes } from "./analytics/analytics.routes.js";
+import { publicApiRoutes } from "./routes/public.routes.js";
+import { adminApiKeyRoutes } from "./routes/adminApiKey.routes.js";
+import { startAnalyticsScheduler } from "./analytics/scheduler.js";
 
 export const server = Fastify({ logger: true });
 
@@ -91,6 +95,7 @@ function hasStatusCode(
 }
 
 let shuttingDown = false;
+let cronTask: ScheduledTask | null = null;
 
 async function shutdown(signal: string) {
   if (shuttingDown) return;
@@ -105,6 +110,7 @@ async function shutdown(signal: string) {
   forceExit.unref();
 
   try {
+    cronTask?.stop();
     await server.close();
     server.log.info("Servidor encerrado com sucesso");
     process.exit(0);
@@ -121,10 +127,16 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"] as const) {
 async function main() {
   await server.register(swagger, {
     openapi: {
-      info: { title: "Greencode API", version: "1.0.0" },
+      info: {
+        title: "Greencode API",
+        description:
+          "Plataforma de Logística Reversa — APIs Interna e Pública de Parceiros (v1)",
+        version: "1.0.0",
+      },
       components: {
         securitySchemes: {
           bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+          apiKeyAuth: { type: "apiKey", in: "header", name: "x-api-key" },
         },
       },
       security: [{ bearerAuth: [] }],
@@ -137,27 +149,39 @@ async function main() {
     uiConfig: { persistAuthorization: true },
   });
 
-  server.register(authRoutes, { prefix: "/api/auth" });
-  server.register(easterEggRoutes, { prefix: "/api/easteregg" });
+  server.register(authRoutes, { prefix: "/api/v1/auth" });
+  server.register(easterEggRoutes, { prefix: "/api/v1/easteregg" });
+
+  server.register(publicApiRoutes, { prefix: "/api/v1/public" });
 
   server.register(async (authenticated) => {
     authenticated.addHook("onRequest", auth);
 
-    authenticated.register(userRoutes, { prefix: "/api/users" });
+    authenticated.register(userRoutes, { prefix: "/api/v1/internal/users" });
     authenticated.register(organizationRoutes, {
-      prefix: "/api/organizations",
+      prefix: "/api/v1/internal/organizations",
     });
-    authenticated.register(batchRoutes, { prefix: "/api/batches" });
-    authenticated.register(equipmentsRoutes, { prefix: "/api/equipments" });
-    authenticated.register(settingsRoute, { prefix: "/api/settings" });
-    authenticated.register(reportRoutes, { prefix: "/api/reports" });
+    authenticated.register(batchRoutes, { prefix: "/api/v1/internal/batches" });
+    authenticated.register(equipmentsRoutes, {
+      prefix: "/api/v1/internal/equipments",
+    });
+    authenticated.register(settingsRoute, {
+      prefix: "/api/v1/internal/settings",
+    });
+    authenticated.register(reportRoutes, {
+      prefix: "/api/v1/internal/reports",
+    });
     authenticated.register(internalAnalyticsRoutes, {
       prefix: "/api/v1/internal/analytics",
+    });
+    authenticated.register(adminApiKeyRoutes, {
+      prefix: "/api/v1/internal/api-keys",
     });
   });
 
   try {
     await server.listen({ port: env.PORT, host: env.HOST });
+    cronTask = startAnalyticsScheduler();
   } catch (e) {
     server.log.error(e);
     process.exit(1);

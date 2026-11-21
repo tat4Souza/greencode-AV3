@@ -1,4 +1,5 @@
 import "dotenv/config";
+import path from "node:path";
 import { z } from "zod";
 
 const envSchema = z.object({
@@ -7,6 +8,10 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default("30m"),
   PORT: z.coerce.number().int().positive().default(3000),
   HOST: z.string().default("0.0.0.0"),
+  REDIS_URL: z.string().default("redis://localhost:6379"),
+  REPORTS_DIR: z
+    .string()
+    .default(path.resolve(process.cwd(), "storage", "reports")),
 });
 
 const parsed = envSchema.safeParse(process.env);
