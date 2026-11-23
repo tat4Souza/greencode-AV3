@@ -1,4 +1,4 @@
-# AV2 | Técnicas de Programação
+# AV3 | Técnicas de Programação
 
 <p align="center">
   <img width="180" height="180" alt="♻️" src="https://github.com/user-attachments/assets/1f47d965-9605-42b7-b80f-b7eea9d559b6" />
@@ -7,17 +7,24 @@
 </p>
 
 <p align="center">
-  | <a href="#papeis">Papéis</a> |
+  | <a href="#novidades">O que mudou na AV3</a> |
+  <a href="#papeis">Papéis</a> |
   <a href="#executar">Como testar</a> |
+  <a href="#api-publica">API pública</a> |
   <a href="#estrutura">Estrutura</a> |
   <a href="#decisoes">Decisões de Arquitetura</a> |
   <a href="#regras">Regras de Negócio</a> |
   <a href="#banco">Banco de Dados</a> |
-  <a href="#conclusao">Considerações Finais</a> |
+  <a href="#limitacoes">Limitações</a> |
 </p>
 
-O **Greencode** evoluiu de um sistema de linha de comando (CLI) com persistência em arquivos criptografados para um **servidor monolítico** que utiliza uma **API RESTful**, desenvolvida em Node.js, TypeScript, Fastify e Prisma ORM, com persistência em **PostgreSQL**.
-Seu propósito continua sendo rastrear o fluxo completo de equipamentos obsoletos — desde a chegada dos lotes até o destino final (desmonte, reciclagem ou reuso) —, agora atendendo a múltiplos usuários simultâneos, com autenticação por JWT, controle de concorrência otimista e documentação interativa via Swagger.
+O **Greencode** rastreia o fluxo completo de equipamentos obsoletos — da chegada dos lotes ao destino final (desmonte, reciclagem ou reuso) —, em um servidor monolítico com **API RESTful** (Node.js, TypeScript, Fastify e Prisma ORM, com **PostgreSQL**).
+
+A **AV3** estende o sistema da AV2 com três blocos, sem alterar as regras de negócio já existentes:
+
+1. **Camada analítica:** eficiência operacional, rentabilidade e previsão de vida útil, com histórico persistido;
+2. **API pública para parceiros:** autenticação por chave de API com escopos, isolamento por organização e limite de requisições por chave;
+3. **Processamento assíncrono:** relatórios pesados em fila (BullMQ + Redis), com status, download, retentativas e webhook, além de um recálculo noturno agendado (node-cron).
 
 ---
 
@@ -31,15 +38,15 @@ Seu propósito continua sendo rastrear o fluxo completo de equipamentos obsoleto
 ![Static Badge](https://img.shields.io/badge/swagger-%2385EA2D?style=for-the-badge&logo=swagger&logoColor=black)
 ![Static Badge](https://img.shields.io/badge/docker-%232496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![Static Badge](https://img.shields.io/badge/postgresql-%234169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+![Static Badge](https://img.shields.io/badge/redis-%23DC382D?style=for-the-badge&logo=redis&logoColor=white)
 
 ### Usos no projeto
 
-- **Node.js + TypeScript**: Runtime e tipagem estática (ESM, `strict`)
-- **Fastify 5**: Servidor HTTP, hooks de autenticação e plugins
-- **Zod 4 + fastify-type-provider-zod**: Validação e tipagem de entradas e saídas
-- **Prisma 7 + PostgreSQL 16**: ORM, migrations versionadas e banco relacional
-- **@fastify/jwt + bcryptjs**: Autenticação stateless e hash de senhas
-- **@fastify/swagger + swagger-ui**: Documentação interativa da API (`/docs`)
+- **Node.js + TypeScript**, **Fastify 5**, **Zod 4 + fastify-type-provider-zod**, **Prisma 7 + PostgreSQL 16**, **@fastify/jwt + bcryptjs**, **@fastify/swagger + swagger-ui** (herdados da AV2);
+- **simple-statistics**: média, mediana, desvio-padrão, regressão linear e R² das análises;
+- **BullMQ + Redis 7 (ioredis)**: fila de relatórios assíncronos, retentativas com backoff e trava do agendador;
+- **node-cron**: recálculo diário das análises (02:00);
+- **@fastify/rate-limit**: limite de requisições por chave de API.
 
 ### Compatibilidade do Sistema
 
@@ -48,24 +55,40 @@ Projetado e validado para execução nativa nos seguintes ambientes:
 - **Windows**: Windows 10 ou superior.
 - **Linux**: Ubuntu 24.04.3 LTS ou superior (e distribuições derivadas).
 
-**Pré-requisitos:** Node.js 22 LTS (mínimo 20.19, exigência do Prisma 7), com npm e Docker com Docker Compose (para o PostgreSQL).
+**Pré-requisitos:** Node.js 22 LTS (mínimo 20.19, exigência do Prisma 7), npm e Docker com Docker Compose. O **Redis não precisa ser instalado na máquina**: ele sobe em contêiner junto com o PostgreSQL.
+
+A compatibilidade entre sistemas operacionais não depende de comandos específicos de shell: caminhos de arquivo são montados com `node:path` (a pasta dos relatórios é resolvida a partir do diretório do projeto) e os scripts do `package.json` usam apenas ferramentas multiplataforma (`tsx`, `rimraf`, `prisma`).
+
+---
+
+## 🆕 O que mudou na AV3 <a id="novidades"></a>
+
+| Bloco                  | Entrega                                                                                                                      |
+| :--------------------- | :--------------------------------------------------------------------------------------------------------------------------- |
+| Versionamento da API   | Autenticação em `/api/v1/auth`; rotas autenticadas em `/api/v1/internal/*`; API de parceiros em `/api/v1/public/*`           |
+| Análises               | Eficiência, rentabilidade e vida útil (`/api/v1/internal/analytics`), com histórico e exportação em JSON/CSV                 |
+| Valor de recuperação   | `Equipment.estimatedValue`, calculado pela API a cada cadastro/atualização/mudança de estado físico (`src/lib/valuation.ts`) |
+| Chaves de API          | Emissão, listagem e revogação (somente ADMIN); escopos; expiração; limite por minuto por chave                               |
+| API pública            | Rastreabilidade de lotes e equipamentos, submissão de lotes, histórico de análises e relatórios assíncronos                  |
+| Relatórios assíncronos | Fila BullMQ, processo _worker_ separado, 3 tentativas com backoff exponencial, download e webhook opcional                   |
+| Agendamento            | Recálculo diário das análises às 02:00, com trava no Redis para evitar execução duplicada                                    |
+| Documentação           | Swagger com descrições, exemplos e esquema de segurança `x-api-key`                                                          |
+| Testes                 | `scripts/jornada-teste.ts` atualizado para `/api/v1` e ampliado com as seções de análises (11) e de API pública (12)         |
 
 ---
 
 ## 👥 Papéis e Permissões do Sistema <a id="papeis"></a>
 
-A API aplica Controle de Acesso Baseado em Papéis (RBAC): cada rota exige o papel adequado e **todas as funcionalidades de cada conta ficam restritas ao escopo que lhe pertence**. Uma conta que tente acessar algo fora do seu escopo recebe `403 Forbidden`. O **Administrador** é o único papel com acesso a todos os recursos.
+O RBAC da AV2 continua valendo para as rotas internas (JWT). As rotas de parceiros usam **outro mecanismo**: chave de API com escopos (veja [API pública](#api-publica)). Uma conta ou chave que tente acessar algo fora do seu escopo recebe `403`.
 
-| Papel                               | O que faz na plataforma                                                                                                                  | Rotas permitidas                                                                                                                    |
-| :---------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------- |
-| **ADMIN** (Administrador)           | Gestão de contas de acesso, parametrização global (alíquota de impostos e depreciação) e acesso a todas as funcionalidades da plataforma | Todas                                                                                                                               |
-| **OPERADOR** (Operador de Cadastro) | Cadastra e gerencia organizações clientes e seus contratos                                                                               | `/api/organizations` e `/api/organizations/:id/contract` (Todas inclusas na divisão 'Organizations' do swagger)                     |
-| **GESTOR** (Gestor de Almoxarifado) | Controla o recebimento de lotes, a triagem e a movimentação de equipamentos                                                              | `/api/batches`, `/api/equipments` e `/api/equipments/:id/movements` (Todas inclusas na divisão 'Batches' e 'Equipments' do swagger) |
-| **AUDITOR**                         | Escopo exclusivo de relatórios (somente leitura)                                                                                         | `/api/reports` (Todas inclusas na divisão 'Reports')                                                                                |
+| Papel                               | O que faz na plataforma                                                                          | Rotas internas permitidas (prefixo `/api/v1/internal`)               |
+| :---------------------------------- | :----------------------------------------------------------------------------------------------- | :------------------------------------------------------------------- |
+| **ADMIN** (Administrador)           | Contas de acesso, parâmetros globais, **emissão e revogação de chaves de API** e todo o restante | Todas                                                                |
+| **OPERADOR** (Operador de Cadastro) | Cadastra e gerencia organizações clientes e seus contratos                                       | `/organizations` e `/organizations/:id/contract`                     |
+| **GESTOR** (Gestor de Almoxarifado) | Recebimento de lotes, triagem e movimentação de equipamentos; **executa análises**               | `/batches`, `/equipments`, `/equipments/:id/movements`, `/analytics` |
+| **AUDITOR**                         | Relatórios (somente leitura); **executa e consulta análises**                                    | `/reports`, `/analytics`                                             |
 
-Além das rotas acima, **todo usuário autenticado** pode usar `POST /api/auth/logout` e `PATCH /api/auth/password`. `POST /api/auth/login` é a única rota pública (além de `/healthcheck` e `/docs`).
-
-**OBS**: A rota de healthcheck serve para verificar a saúde da API e certificar-se de que ela está rodando adequadamente.
+Todo usuário autenticado pode usar `POST /api/v1/auth/logout` e `PATCH /api/v1/auth/password`. `POST /api/v1/auth/login` é a única rota interna pública (além de `/healthcheck` e `/docs`). As rotas `/api/v1/public/*` exigem chave de API e **não aceitam JWT**.
 
 ### 🔑 Usuários de demonstração (criados pelo seed)
 
@@ -76,7 +99,9 @@ Além das rotas acima, **todo usuário autenticado** pode usar `POST /api/auth/l
 | GESTOR   | `gestor@greencode.com`   | `Demo@1234`  |
 | AUDITOR  | `auditor@greencode.com`  | `Demo@1234`  |
 
-> 💡 O Administrador inicial é criado pelo **seed**, pois `POST /api/users` exige um ADMIN autenticado. As credenciais do ADMIN podem ser trocadas pelas variáveis `ADMIN_EMAIL` e `ADMIN_PASSWORD` (e a senha dos demais usuários por `SEED_USER_PASSWORD`) no `.env`, antes de executar o seed.
+O seed também cria os operadores `operador2@greencode.com` e `operador3@greencode.com` (mesma senha), usados para comparar a eficiência entre operadores. **O seed não cria chaves de API**: a chave só é exibida uma vez, no momento da emissão (veja o passo 5 de "Como testar").
+
+> 💡 As credenciais podem ser trocadas pelas variáveis `ADMIN_EMAIL`, `ADMIN_PASSWORD` e `SEED_USER_PASSWORD` no `.env`, antes de executar o seed.
 
 <br>
 
@@ -84,13 +109,7 @@ Além das rotas acima, **todo usuário autenticado** pode usar `POST /api/auth/l
 
 ## 🚀 Como testar <a id="executar"></a>
 
-### 1. Subir o banco de dados (Docker)
-
-```bash
-docker compose up -d
-```
-
-### 2. Criar o arquivo de ambiente
+### 1. Criar o arquivo de ambiente
 
 ```bash
 # Linux / macOS
@@ -103,18 +122,19 @@ copy .env.example .env
 | Variável                         | Descrição                                             | Padrão                                                     |
 | :------------------------------- | :---------------------------------------------------- | :--------------------------------------------------------- |
 | `DATABASE_URL`                   | String de conexão do PostgreSQL                       | `postgresql://greenUser:green123@localhost:5432/greencode` |
+| `REDIS_URL`                      | Conexão do Redis (fila e trava do agendador)          | `redis://localhost:6379`                                   |
+| `REPORTS_DIR`                    | Pasta onde o worker grava os relatórios gerados       | `storage/reports` (dentro do projeto)                      |
 | `JWT_SECRET`                     | Segredo de assinatura dos tokens (mín. 16 caracteres) | — (obrigatório)                                            |
 | `JWT_EXPIRES_IN`                 | Validade do token                                     | `30m`                                                      |
-| `PORT`                           | Porta do servidor (configurável)                      | `3000`                                                     |
-| `HOST`                           | Interface de escuta                                   | `0.0.0.0`                                                  |
+| `PORT` / `HOST`                  | Porta e interface de escuta                           | `3000` / `0.0.0.0`                                         |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Credenciais do administrador criado no seed           | `admin@greencode.com` / `Admin@1234`                       |
 | `SEED_USER_PASSWORD`             | Senha dos demais usuários do seed                     | `Demo@1234`                                                |
 
 > As variáveis são validadas com Zod na inicialização: se alguma estiver ausente ou inválida, o servidor encerra informando o problema.
 
-### 3. Executar o passo a passo
+### 2. Passo a passo
 
-#### I.) Banco no ar
+#### I.) Sobe o PostgreSQL **e o Redis**
 
 ```bash
 docker compose up -d
@@ -144,176 +164,140 @@ npm run db:seed
 npm run build
 ```
 
-#### VI.) Simula o servidor de produção: remove as devDependencies
-
-```bash
-npm prune --omit=dev
-```
-
-#### VII.) Sobe a versão compilada
+#### VI.) Sobe a API (terminal 1)
 
 ```bash
 npm start
 ```
 
-#### VIII.) Executa o script de teste da jornada
-
-O script usa o `tsx`, uma devDependency removida no passo VI. Por isso, interrompa o servidor (`Ctrl+C`), restaure as dependências e suba o servidor novamente:
+#### VII.) Sobe o worker de relatórios (terminal 2)
 
 ```bash
-npm ci
-npm start
+npm run worker:start
 ```
 
-Em **outro terminal**, com o servidor rodando, execute:
+> ⚠️ **O worker é um processo separado da API.** Sem ele, os relatórios assíncronos ficam eternamente em `NA_FILA` (e a seção 12 do script de teste falha). Os dois processos precisam enxergar a mesma pasta `REPORTS_DIR`.
 
-```bash
-npm run test
-```
+#### VIII.) Executa o script de teste da jornada (terminal 3)
 
-> 💡 Os detalhes do que o script verifica estão na seção 7.
-
-> 💡 Para voltar ao modo de desenvolvimento (`npm run dev`) depois do passo VI, execute `npm ci` novamente.
-
-### 4. Verificar
-
-| O que conferir          | Como                                                                                                                             |
-| :---------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
-| Servidor no ar          | `GET http://localhost:3000/healthcheck`                                                                                          |
-| Documentação interativa | Abrir `http://localhost:3000/docs`                                                                                               |
-| Autenticação            | Em `POST /api/auth/login`, usar um usuário da tabela de credenciais; copiar o `accessToken` e clicar em **Authorize** no Swagger |
-| Escopo por papel        | Logar com o AUDITOR e tentar `GET /api/batches` (deve retornar `403`); acessar `GET /api/reports/financial` (deve funcionar)     |
-| Graceful shutdown       | Pressionar `Ctrl+C` no terminal: o servidor finaliza as conexões ativas e desconecta o Prisma antes de encerrar                  |
-| Porta configurável      | `PORT=4000 npm start` (Linux) ou `$env:PORT=4000; npm start` (PowerShell)                                                        |
-
-### 5. Scripts disponíveis
-
-- `npm run dev`: Servidor em modo desenvolvimento (`tsx watch`);
-- `npm run build`: Limpa `dist`, gera o client do Prisma e compila o TypeScript;
-- `npm start`: Executa a versão compilada (`dist/app.js`);
-- `npm run db:generate`: Gera o Prisma Client;
-- `npm run db:migrate`: Cria/aplica migrations em desenvolvimento;
-- `npm run db:deploy`: Aplica as migrations existentes (produção);
-- `npm run db:seed`: Popula o banco com dados de demonstração;
-- `npm run test`: Executa o script de teste da jornada completa pela API (requer o servidor rodando).
-
-### 6. Massa de dados do seed
-
-O seed cobre os cenários de validação do CLI e pode ser executado várias vezes (usuários, organizações e contratos não são duplicados; os lotes de demonstração são recriados).
-
-- **Organizações:** uma com contrato válido, uma com contrato vencido, uma sem contrato e uma inativa.
-- **Lotes:** em todos os status (`RECEBIDO`, `EM_TRIAGEM`, `TRIAGEM_CONCLUIDA`, `ENCAMINHADO`, `FINALIZADO`), incluindo um lote inativo.
-- **Equipamentos:** nos 8 status de rastreamento e em diversos estados físicos.
-- **Movimentações:** histórico coerente com o caminho de cada equipamento, incluindo quedas de estado físico com justificativa.
-- **Configurações globais:** alíquota de 10% e depreciação de 15%.
-
-### 7. O que é verificado no script de teste fornecido?
-
-O script `scripts/jornada-teste.ts` percorre a jornada completa da aplicação por meio da API, do login do administrador até a remoção dos dados criados, e demonstra as principais regras cobradas na AV1 e na AV2. Ele serve como base de conferência: os cenários adicionais podem ser verificados pelo Swagger (`/docs`) ou acrescentando novos passos ao próprio script.
-
-> Como executar (com o servidor no ar, em outro terminal, e o seed já executado; veja o passo VIII de "Como testar"):
+O script usa o `tsx`, uma devDependency. Se você removeu as devDependencies (`npm prune --omit=dev`) para simular produção, execute `npm ci` novamente antes de rodá-lo:
 
 ```bash
 npm run test
 ```
 
-#### Como funciona:
+> 💡 Para desenvolvimento, use `npm run dev` (API) e `npm run worker:dev` (worker), ambos com recarga automática.
 
-- Cada passo imprime `[ OK ]` ou `[FALHOU]`, a rota chamada, o status HTTP recebido e a mensagem de erro devolvida pela API (quando houver);
-- Ao final, o script exibe o total de passos aprovados e, em caso de falha, a lista do que falhou (o código de saída é diferente de zero);
-- O script cria os próprios dados (CNPJs válidos e e-mails com um identificador único por execução), então pode ser executado várias vezes seguidas;
-- Ao terminar, as organizações criadas são removidas (levando junto contratos, lotes e equipamentos). Permanecem no banco apenas dois usuários de teste: um operador (inativo) e um gestor.
+### 3. Verificar
 
-São executados **110 passos**, divididos em **13 seções**:
+| O que conferir           | Como                                                                                                                          |
+| :----------------------- | :---------------------------------------------------------------------------------------------------------------------------- |
+| Servidor no ar           | `GET http://localhost:3000/healthcheck`                                                                                       |
+| Documentação interativa  | Abrir `http://localhost:3000/docs`                                                                                            |
+| Autenticação interna     | Em `POST /api/v1/auth/login`, copiar o `accessToken` e clicar em **Authorize** (esquema Bearer)                               |
+| Autenticação de parceiro | Emitir uma chave (passo 5 abaixo), clicar em **Authorize** e informar a chave no esquema `apiKeyAuth` (cabeçalho `x-api-key`) |
+| Escopo por papel         | Logar com o OPERADOR e tentar `POST /api/v1/internal/analytics/efficiency` (deve retornar `403`)                              |
+| Graceful shutdown        | `Ctrl+C` em cada processo: a API e o worker encerram conexões e desconectam o Prisma                                          |
 
-#### I). Disponibilidade e autenticação
+### 4. Gerando análises (rotas internas)
 
-- Verifica se o servidor responde ao endpoint de saúde (`/healthcheck`);
-- Confere se rotas protegidas são negadas sem token e com token inválido;
-- Confere se as credenciais são validadas corretamente: login com senha incorreta, com usuário inexistente e sem e-mail são negados;
-- Realiza o login do administrador e obtém o token JWT.
+Faça login como ADMIN, GESTOR ou AUDITOR e, no Swagger (tag **Analytics**), execute com o corpo `{}`:
 
-#### II). Administrador: contas de acesso
+- `POST /api/v1/internal/analytics/efficiency`
+- `POST /api/v1/internal/analytics/profitability`
+- `POST /api/v1/internal/analytics/lifespan`
+- `GET /api/v1/internal/analytics/reports` (histórico, com filtro por tipo)
+- `PATCH /api/v1/internal/analytics/predictions/{id}/evaluate` com `{"actualLifespanYears": 8}` (registra a vida útil real e calcula o erro da previsão)
 
-- Cria um usuário de cada papel disponível (OPERADOR, GESTOR e AUDITOR);
-- Verifica se e-mails duplicados e papéis inexistentes na plataforma são rejeitados;
-- Atualiza um usuário com a versão atual (permitido, pois ninguém alterou o registro nesse intervalo);
-- Atualiza um usuário com uma versão antiga (erro de conflito, pois isso significa que outra requisição alterou o dado antes: controle de concorrência otimista).
+### 5. Emitindo uma chave de API (somente ADMIN)
 
-#### III). Administrador: parâmetros globais
+```
+POST /api/v1/internal/api-keys
+{
+  "orgId": "<id de uma organização do seed>",
+  "name": "Integração ERP",
+  "scopes": ["traceability:read", "reports:request"],
+  "rateLimitPerMin": 60
+}
+```
 
-- Consulta as configurações globais do sistema;
-- Verifica se alíquotas acima de 100% e negativas são rejeitadas;
-- Atualiza a alíquota de impostos e confere o conflito ao reutilizar uma versão antiga;
-- Restaura a alíquota original.
+A resposta traz o campo `plainKey` (formato `gc_live_<prefixo>_<segredo>`). **Ele aparece uma única vez**: o banco guarda apenas o hash.
 
-#### IV). Login dos demais perfis
+### 6. Scripts disponíveis
 
-- Autentica o operador, o gestor e o auditor com as contas criadas na seção anterior.
+- `npm run dev` / `npm run worker:dev`: API e worker em modo desenvolvimento (`tsx watch`);
+- `npm run build`: limpa `dist`, gera o client do Prisma e compila o TypeScript;
+- `npm start` / `npm run worker:start`: executam a versão compilada (`dist/app.js` e `dist/worker.js`);
+- `npm run db:generate`, `db:migrate`, `db:deploy`, `db:seed`: Prisma Client, migrations (dev e produção) e seed;
+- `npm run test`: executa o script de teste da jornada completa (requer API, worker, PostgreSQL e Redis no ar).
 
-#### V). Controle de acesso por papel (RBAC)
+### 7. Massa de dados do seed
 
-- Verifica se cada perfil recebe `403` ao tentar acessar funcionalidades fora do seu escopo: o operador não acessa usuários nem cadastra lotes; o gestor não acessa organizações nem configurações globais; o auditor não acessa lotes nem cadastra organizações.
+Além dos cenários da AV2 (organizações com contrato válido, vencido, ausente e inativa; lotes em todos os status; equipamentos em todos os estados; movimentações coerentes), o seed da AV3 gera um **histórico para alimentar as análises**:
 
-#### VI). Operador: organizações e contratos
+- **12 lotes históricos com 5 equipamentos cada** (60 equipamentos, 12 de cada um dos 5 tipos usados), todos com triagem concluída, distribuídos entre os 3 operadores, com **velocidades diferentes por operador** (para a comparação de eficiência) e **taxas de desgaste diferentes por tipo** (para a regressão de vida útil);
+- **`estimatedValue` preenchido** em todos os equipamentos, usando o mesmo modelo de `src/lib/valuation.ts`;
+- **Aleatoriedade determinística** (gerador com semente fixa): rodar o seed duas vezes produz os mesmos dados;
+- Datas dentro da janela de 90 dias imposta pelo trigger do banco, que vale também para o seed.
 
-- Verifica se CNPJs inválidos (dígitos repetidos e tamanho incorreto) e duplicados são rejeitados;
-- Testa o cadastro de contrato com vencimento no passado (rejeitado);
-- Cadastra uma organização com contrato válido e outra sem contrato (que pode permanecer ativa);
-- Verifica a listagem com o filtro de contratos válidos;
-- Atualiza uma organização com a versão atual (permitido) e com uma versão antiga (conflito).
+### 8. O que é verificado no script de teste?
 
-#### VII). Gestor: recebimento de lotes
+O script `scripts/jornada-teste.ts` percorre a jornada completa pela API, do login do administrador à remoção dos dados criados. Cada passo imprime `[ OK ]` ou `[FALHOU]`, a rota, o status HTTP e a mensagem de erro; ao final exibe o total de passos aprovados e, havendo falha, a lista do que falhou (código de saída diferente de zero). Ele cria os próprios dados (CNPJs válidos e identificador único por execução) e remove as organizações criadas ao terminar.
 
-- Verifica se a criação de lote é recusada para organização inexistente ou sem contrato;
-- Verifica se datas de entrada futuras ou anteriores a 90 dias são rejeitadas;
-- Verifica se lote sem transportadora, equipamento com tipo inválido e equipamento com ano de fabricação futuro são rejeitados;
-- Cadastra um lote com 2 equipamentos em uma única transação (ambos nascem em `AGUARDANDO_TRIAGEM`);
-- Adiciona um equipamento avulso já em triagem (status inicial livre);
-- Consulta o lote para conferir o peso total calculado.
+São **15 seções**. As seções I a X e XIII a XV são as da AV2 (autenticação, contas, parâmetros globais, RBAC, organizações e contratos, lotes, triagem, ciclo de vida do lote, relatórios, soft delete, hard delete e sessão), apenas apontando para as rotas `/api/v1`. As seções novas são:
 
-#### VIII). Gestor: triagem e movimentação de equipamentos
+#### XI). Análises internas: eficiência, rentabilidade e vida útil
 
-- Verifica se o desmonte sem triagem é rejeitado;
-- Coloca os equipamentos em triagem e confere o conflito ao movimentar com uma versão antiga;
-- Verifica se a queda de duas ou mais categorias no estado físico é rejeitada sem justificativa e aceita com justificativa;
-- Consulta o histórico para confirmar que as movimentações foram registradas automaticamente.
+- Análises exigem autenticação (`401`) e o OPERADOR não as executa (`403`);
+- O auditor executa as três análises e cada resultado é gravado com o tipo e a estrutura esperados (comparação por operador, agrupamento por tipo de equipamento, projeções por tipo);
+- O histórico lista os relatórios gerados e respeita o filtro por tipo;
+- O gestor registra a vida útil real de uma previsão e o erro é calculado.
 
-#### IX). Gestor: ciclo de vida do lote
+#### XII). API pública: chaves, escopos, isolamento, limite e relatórios assíncronos
 
-- Verifica se pular etapas do lote é rejeitado;
-- Avança o lote para `EM_TRIAGEM` e confere que concluir a triagem com equipamentos ainda em triagem é rejeitado;
-- Avança os equipamentos e conclui a triagem do lote;
-- Verifica se encaminhar o lote com equipamentos aguardando desmonte é rejeitado e, depois, encaminha o lote;
-- Verifica se finalizar o lote com equipamentos ainda em desmonte é rejeitado e, depois, finaliza o lote;
-- Confere que um lote finalizado não aceita novas movimentações de equipamentos.
+- Cadastra dois parceiros (P1 e P2) e o ADMIN emite chaves: completa, somente leitura, de P2 e uma com limite de 3 req/min;
+- Rejeita escopo inexistente (`400`), emissão por quem não é ADMIN (`403`) e organização inexistente (`404`);
+- A listagem de chaves **nunca expõe o segredo nem o hash**;
+- Rota pública sem chave, com chave inválida ou com JWT interno: `401`;
+- Chave sem o escopo exigido: `403` (submissão de lote e solicitação de relatório);
+- O parceiro submete um lote pela API pública (vinculado à organização dona da chave) e o equipamento entra na rentabilidade com valor estimado;
+- Rastreabilidade de lote e de equipamento com chave de leitura; **P2 não enxerga dados de P1** (`404`);
+- Relatório assíncrono: solicitação (`202`), _polling_ até `CONCLUIDO`, download do CSV e isolamento da tarefa entre parceiros;
+- O histórico de análises da API pública traz **somente** relatórios da própria organização;
+- Limite por chave: 3 requisições aceitas e a 4ª recebe `429`;
+- Revogação: a chave revogada passa a responder `401` imediatamente e revogar de novo é rejeitado;
+- Remove os parceiros, levando junto lotes e chaves (cascata).
 
-#### X). Auditor: relatórios
+<br>
 
-- Consulta os relatórios por organização (no período), por status de rastreamento e financeiro;
-- Verifica se um relatório sem o parâmetro obrigatório é rejeitado;
-- Confere que o gestor não acessa os relatórios.
+---
 
-#### XI). Soft delete (inativar/reativar) e cascata
+## 🔌 API pública para parceiros <a id="api-publica"></a>
 
-- Verifica se um usuário com registros vinculados não pode ser removido (a API orienta a inativá-lo);
-- Cadastra e renova o contrato da segunda organização, que passa a poder receber lotes;
-- Inativa um lote e confere que ele continua consultável, que seus equipamentos deixam de aparecer e que ele não pode ser editado; depois o reativa;
-- Inativa uma organização e confere que seus lotes são inativados junto e que ela não recebe novos lotes; depois a reativa e confere que os lotes voltam a ficar ativos.
+Base: `/api/v1/public`. Todas as rotas exigem o cabeçalho `x-api-key`.
 
-#### XII). Hard delete (remoção definitiva) e cascata
+| Rota                               | Escopo exigido      | Descrição                                                                                |
+| :--------------------------------- | :------------------ | :--------------------------------------------------------------------------------------- |
+| `GET /batches/:id/traceability`    | `traceability:read` | Situação e equipamentos de um lote do parceiro                                           |
+| `GET /equipments/:id/traceability` | `traceability:read` | Dados e histórico de movimentações de um equipamento do parceiro                         |
+| `GET /analytics/reports`           | `traceability:read` | Histórico de análises **da própria organização** (relatórios globais nunca são expostos) |
+| `POST /batches`                    | `batches:write`     | Submete um lote com equipamentos; a organização é a dona da chave                        |
+| `POST /reports`                    | `reports:request`   | Solicita um relatório assíncrono (`202` + id da tarefa)                                  |
+| `GET /reports/:id`                 | `reports:request`   | Status da tarefa (`NA_FILA`, `PROCESSANDO`, `CONCLUIDO`, `FALHOU`), tentativas e erro    |
+| `GET /reports/:id/download`        | `reports:request`   | Baixa o arquivo gerado (`400` enquanto a tarefa não estiver concluída)                   |
 
-- Remove um equipamento, um lote, um contrato e uma organização e confirma que os registros não existem mais;
-- Remove a primeira organização e confirma que seus lotes e equipamentos foram removidos em cascata.
+**Códigos de erro:** `400` dados inválidos; `401` chave ausente, inválida, expirada ou revogada; `403` escopo insuficiente; `404` recurso inexistente **ou de outra organização**; `429` limite de requisições excedido.
 
-#### XIII). Sessão, senha e ciclo de vida de usuários
+Exemplo (PowerShell: use `curl.exe`; no Linux, `curl`):
 
-- Verifica se a troca de senha com a senha atual incorreta é rejeitada;
-- Troca a senha do auditor e confere que o token antigo deixa de valer (`tokenVersion`) e que o login com a nova senha funciona;
-- Realiza o logout do gestor e confere que o token dele deixa de valer;
-- Remove definitivamente um usuário sem registros vinculados;
-- Inativa o operador e confere que ele não consegue mais fazer login e que o token dele deixa de valer;
-- Verifica se o administrador é impedido de inativar a si mesmo.
+```bash
+curl -X POST http://localhost:3000/api/v1/public/reports \
+  -H "x-api-key: gc_live_xxxxxxxx_yyyyyyyy..." \
+  -H "Content-Type: application/json" \
+  -d '{"type":"RENTABILIDADE","format":"csv"}'
+```
+
+Os arquivos CSV usam `;` como separador e BOM UTF-8, para abrirem corretamente no Excel em português.
 
 <br>
 
@@ -323,174 +307,154 @@ São executados **110 passos**, divididos em **13 seções**:
 
 ```
 prisma/
-├── schema.prisma        # Modelos e relacionamentos
-├── migrations/          # Migrations versionadas (inclui constraints e triggers)
-└── seed.ts              # Massa de dados de demonstração
+├── schema.prisma          # Modelos e relacionamentos
+├── migrations/            # Migrations versionadas (constraints e triggers incluídos)
+└── seed.ts                # Massa de dados (inclui o histórico para as análises)
+scripts/
+└── jornada-teste.ts       # Teste da jornada completa pela API
 src/
-├── app.ts               # Servidor, plugins, error handler global e graceful shutdown
-├── routes/              # Declaração das rotas, schemas e papéis exigidos
-├── controllers/         # Camada HTTP: lê a requisição e devolve a resposta
-├── services/            # Regras de negócio e tradução de erros
-├── repositories/        # Único ponto de acesso ao banco (Prisma)
-├── schemas/             # Schemas Zod (body, params, query e resposta)
-├── middlewares/         # auth (JWT) e requireRole (papéis)
-└── lib/                 # env, errors, prisma e validators
+├── app.ts                 # Servidor, plugins, rotas versionadas, agendador e graceful shutdown
+├── worker.ts              # Processo separado que consome a fila de relatórios
+├── routes/                # Rotas (internas e públicas), schemas e papéis/escopos exigidos
+├── controllers/           # Camada HTTP
+├── services/              # Regras de negócio (inclui chaves de API e API pública)
+├── repositories/          # Acesso ao banco (Prisma) dos módulos de negócio
+├── schemas/               # Schemas Zod (body, params, query e resposta)
+├── middlewares/           # auth (JWT), requireRole e apiKeyAuth/requireScope
+├── queues/                # Fila BullMQ e conexão com o Redis
+├── analytics/             # MÓDULO ANALÍTICO (autocontido)
+│   ├── analytics.routes.ts
+│   ├── analytics.controller.ts
+│   ├── analytics.schema.ts
+│   ├── analytics.repository.ts
+│   ├── reportExporter.ts  # JSON/CSV
+│   ├── scheduler.ts       # node-cron + trava no Redis
+│   └── services/          # efficiency, profitability e lifespan
+└── lib/                   # env, errors, prisma, validators e valuation (valor de recuperação)
 ```
 
-Fluxo de uma requisição:
-
-```
-Rota (valida com Zod + papel) → Controller → Service (regras) → Repository (Prisma) → PostgreSQL
-```
-
-**Por que separar _services_ de _repositories_?** Assim como indicado na estrutura monolítica, isso é feito para que **apenas uma camada se comunique com o banco**. Caso a ORM ou o próprio tipo de banco seja trocado, o arquivo de regras de negócio (service) não precisa ser refatorado: apenas os repositórios mudam.
-
-**Por que separar _routes_ de _controllers_?** Para manter uma organização e um fluxo de leitura mais natural: a rota declara o contrato (caminho, schemas, papéis e documentação) e o controller cuida apenas de traduzir HTTP para chamadas de serviço, sem `try/catch` nem regras de negócio.
+Fluxo de uma requisição interna: `Rota (Zod + papel) → Controller → Service → Repository → PostgreSQL`.
+Fluxo de um relatório assíncrono: `POST /reports → ReportJob (banco) + job (Redis) → Worker → analytics/services → arquivo em REPORTS_DIR → status CONCLUIDO (+ webhook)`.
 
 <br>
 
 ---
 
-## 🧠 Decisões de Arquitetura e Trade-offs <a id="decisoes"></a>
+## 🧠 Decisões de Arquitetura e Trade-offs (AV3) <a id="decisoes"></a>
 
-### 1. Monólito em camadas (Controller → Service → Repository)
+### 1. Módulo analítico em pasta própria (`src/analytics`)
 
-Para o estágio atual do empreendimento, o monólito prioriza simplicidade de implantação, facilidade de depuração e coesão do código. A divisão em camadas mantém o caminho aberto para uma futura extração de módulos, sem pagar o custo de microsserviços agora.
+Na AV2, o código é organizado **por tipo de arquivo** (todas as rotas juntas, todos os controllers juntos, etc.). Para a AV3, a camada analítica foi colocada **em uma pasta própria, com seu próprio conjunto de rotas, controller, schemas, repositório e serviços**, em vez de espalhar seus arquivos pelas pastas globais.
 
-### 2. Documentação interativa e uso do Zod
+**Por quê:**
 
-A rota **`/docs`** exibe o Swagger UI com a documentação de **todas as rotas da API** (agrupadas por tag, com os papéis e os schemas de entrada e saída), e permite autenticar com o token e testar as requisições direto pelo navegador.
+- **Coesão e baixo acoplamento.** A análise só _lê_ dados de lotes, equipamentos e movimentações e _escreve_ apenas nas suas tabelas (`AnalyticsReport` e `Prediction`). Nenhuma regra de negócio da AV1/AV2 depende dela; apagar a pasta não quebra o restante do sistema.
+- **Três pontos de entrada, um só código.** O mesmo serviço é chamado pela rota interna, pelo _worker_ (relatório assíncrono) e pelo agendador (cron). Manter tudo junto evita que cada entrada acabe com uma cópia da lógica.
+- **Caminho de extração.** Se a carga analítica crescer, o módulo pode virar um serviço separado (ou rodar só no worker) sem desmontar camadas do monólito.
+- **Evolução independente.** Novas análises entram como um novo arquivo em `services/` e uma rota, sem tocar nas camadas globais.
 
-O **Zod** foi uma escolha muito conveniente porque trata o JSON em todos os pontos de contato da API:
+**Trade-offs assumidos:**
 
-- **Envio de dados** (`body`), **parâmetros de rota** (`params`) e **query strings** (`querystring`) são validados e convertidos antes de chegarem ao controller (ex.: `z.coerce.date()`, `z.stringbool()`, `z.uuid()`);
-- **Respostas** (`response`) são serializadas por schema, o que garante o formato de saída e descarta campos não declarados (o `passwordHash`, por exemplo, nunca é enviado);
-- Os **tipos TypeScript** são inferidos dos schemas (`z.infer`), então validação e tipagem nunca ficam desalinhadas;
-- Os mesmos schemas alimentam o Swagger (`jsonSchemaTransform`), de modo que a **documentação é gerada a partir do código** e não fica desatualizada.
+- A organização fica **mista**: o restante do projeto é por camada, o módulo analítico é por domínio. Aceitei a inconsistência por ser o único módulo com ciclo de vida próprio (fila, cron, exportação).
+- O repositório analítico consulta diretamente tabelas de outros domínios (lotes, equipamentos e movimentações) com consultas sob medida, em vez de reutilizar os repositórios existentes. Isso duplica um pouco de acesso a dados, mas evita carregar relações desnecessárias e mantém o módulo desacoplado.
+- A API pública (`routes/public.routes.ts`) permanece nas pastas globais, pois é uma preocupação diferente (autenticação por chave) e apenas _consome_ os schemas e o repositório do módulo analítico.
 
-### 3. Tratamento de erros: handler global + `errors.ts`
+### 2. Por que simple-statistics
 
-O servidor possui um `setErrorHandler` **global** que centraliza a resposta de qualquer falha: erros de validação do Zod (`400`), erros tipados da aplicação, erros conhecidos do Prisma (`P2025` → `404`, `P2002` → `409`, `P2003` → `400`) e, por fim, qualquer erro inesperado (`500`). Com isso, controllers ficam sem `try/catch`.
+As três análises usam apenas estatística descritiva e regressão linear simples (média, mediana, desvio-padrão, `linearRegression`, `rSquared`). A biblioteca foi escolhida porque:
 
-Mesmo assim, mantive o arquivo **`errors.ts`** (`notFound`, `conflict`, `forbidden`, `notAuth`, `badRequest`). Ele existe para ter **uma tipificação mais precisa** e poder **controlar exatamente qual erro cada regra de negócio gera** no service (por exemplo, `409` para conflito de versão e `400` para violação de regra), em vez de depender apenas da tradução automática dos códigos do Prisma.
+- é **pequena, sem dependências, tipada e com funções puras**, o que torna os cálculos previsíveis e fáceis de conferir;
+- implementa **exatamente** o que o problema pede, sem trazer um framework de _machine learning_ (TensorFlow.js e similares seriam _overkill_ para esse volume de dados e dificultariam explicar o resultado);
+- evita **reimplementar à mão** fórmulas sujeitas a erro (desvio-padrão amostral, mínimos quadrados, R²).
 
-### 4. Autenticação com JWT e `tokenVersion` armazenado no banco
+**Alternativas consideradas:** (a) funções estatísticas do PostgreSQL (`regr_slope`, `percentile_cont`), que funcionariam, mas prenderiam a lógica ao banco e dificultariam testá-la e versioná-la junto do código; (b) escrever as fórmulas manualmente, descartado pelo risco de erro. **Limitação:** o modelo é linear e simples; com poucos pontos por tipo, o R² serve mais como indicador de confiança do que como garantia.
 
-O token carrega `{ id, role, tv }`. A versão do token (`tokenVersion`) é armazenada na tabela de usuários e conferida a cada requisição. Com isso é possível **controlar o logout do usuário a partir de determinadas ações**, mesmo que o JWT ainda não tenha expirado:
+### 3. Modelagem das tabelas novas
 
-- logout explícito (`POST /api/auth/logout`);
-- troca de senha;
-- alteração de papel ou de e-mail do usuário;
-- inativação do usuário (a sessão também deixa de ser válida).
+| Tabela                | Papel                                                         | Decisão de modelagem                                                                                                                                                                                                            |
+| :-------------------- | :------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `relatorio_analitico` | Histórico de análises executadas (`AnalyticsReport`)          | `parametros` e `resultado` em **JSON**: cada análise tem um formato de saída diferente, e o histórico não exige uma migration a cada métrica nova. Índice em `(tipo, gerado_em)`. Guarda `versao_modelo`.                       |
+| `previsao_vida_util`  | Uma linha por previsão por tipo de equipamento (`Prediction`) | **Relacional**, porque é consultada, avaliada e usada na calibração: coeficientes, R², amostra, vida útil prevista, vida útil real, erro e data da avaliação.                                                                   |
+| `chave_api`           | Credenciais de parceiros (`ApiKey`)                           | Guarda **apenas o hash SHA-256** da chave e um **prefixo único** para localizá-la; escopos em lista, limite por minuto, ativa/revogada, expiração e último uso. Remover a organização remove suas chaves (`ON DELETE CASCADE`). |
+| `tarefa_relatorio`    | Estado de cada relatório assíncrono (`ReportJob`)             | Status (`NA_FILA`, `PROCESSANDO`, `CONCLUIDO`, `FALHOU`), tentativas, último erro e caminho do arquivo. O vínculo com a chave é opcional e **não** é em cascata: a tarefa não some junto com a chave.                           |
 
-**Alternativa rejeitada:** manter uma _blacklist_ de tokens em tabela. Ela cresceria indefinidamente e exigiria limpeza; um único inteiro por usuário resolve o mesmo problema.
+**Por que `AnalyticsReport` em JSON e `Prediction` relacional?** O primeiro é um _registro histórico_ que só é lido por inteiro; o segundo precisa ser filtrado por tipo, ordenado e usado em cálculos. Cada estrutura segue o seu uso.
 
-### 5. Controle de concorrência otimista (`version`)
+**Por que o hash e não a chave?** Se o banco vazar, as chaves não podem ser reaproveitadas. Como a chave é longa e aleatória (192 bits de segredo), um SHA-256 simples basta; _bcrypt_ (usado nas senhas) seria desnecessariamente lento para uma verificação feita a cada requisição.
 
-Todos os modelos mutáveis possuem o campo `version`. Toda atualização exige a versão que o cliente leu e é executada como `updateMany({ where: { id, version } })` com incremento da versão; se nenhuma linha for afetada, a API responde `409 Conflict` pedindo para recarregar os dados. Assim evitam-se updates perdidos sem o custo de bloqueios pessimistas.
+**Por que `estimatedValue` calculado na API?** A rentabilidade depende desse valor. Se ele só existisse nos dados do seed, qualquer equipamento cadastrado pela API ficaria fora da análise. `src/lib/valuation.ts` aplica um modelo determinístico: `valor = base(tipo) × fator(estado físico) × fator(idade, com piso de 50%) × fator(marca premium) × fator(linha corporativa)`.
 
-### 6. Transações (`$transaction`)
+### 4. Fila, retentativas e webhook
 
-Operações que precisam ser "tudo ou nada":
+- **Por que assíncrono:** gerar uma análise varre lotes, equipamentos e movimentações; fazer isso dentro da requisição prenderia o cliente e a API. A rota responde `202` com o identificador da tarefa e o parceiro acompanha por _polling_ ou webhook.
+- **Por que BullMQ + Redis:** fila persistente, com retentativas e _backoff_ prontos; evita escrever (e testar) um mecanismo próprio.
+- **Política de retry:** **3 tentativas** no total, com **_backoff_ exponencial de base 2 s** (espera de 2 s e depois de 4 s). Enquanto há tentativas restantes a tarefa volta a `NA_FILA`; esgotadas, vai para `FALHOU`, com o último erro e a data de término. Jobs falhos são **mantidos** na fila para diagnóstico e os 100 últimos concluídos são guardados.
+- **Por que 3 e 2 s:** falhas transitórias (conexão com o banco ou Redis) costumam se resolver em segundos; mais tentativas só atrasariam o aviso de uma falha permanente. Como erros de validação não são transitórios, o parceiro vê o motivo no campo `error`.
+- **Worker separado da API:** o processamento pesado não compete com o atendimento das requisições, e o worker pode ser escalado (ou parado) de forma independente. A concorrência por processo é 2.
+- **Webhook:** ao concluir, o worker envia um `POST` com `event`, `jobId`, `type`, `status` e `finishedAt`. É _best effort_: uma falha é apenas registrada em log e **não** reprocessa a tarefa (o relatório já foi gerado e continua disponível por _polling_).
 
-- criação de um lote junto com seus equipamentos (_nested write_ atômico);
-- mudança de status/estado físico de um equipamento **junto** com o registro da movimentação;
-- inativação/reativação de uma organização junto com seus lotes;
-- criação de um equipamento com cálculo da posição no lote.
+### 5. Agendamento com trava distribuída
 
-### 7. Rastreabilidade em substituição a uma tabela de logs
+O `node-cron` recalcula as três análises todo dia às **02:00** (horário de menor uso). Se houver mais de uma instância da API, todas disparariam o cron; por isso cada execução tenta adquirir uma **trava no Redis** (`SET NX EX 300`) e as demais instâncias ignoram a rodada.
 
-Para manter a rastreabilidade que o _journal_ fornecia na AV1, admitiu-se o uso de **`createdAt`, `createdBy`, `updatedAt` e `updatedBy`** nos modelos, além do histórico completo de movimentações dos equipamentos. Isso já proporciona uma camada a mais de rastreabilidade.
+### 6. Chaves de API, escopos e isolamento por organização
 
-**Alternativa rejeitada:** criar uma tabela nova de auditoria. Considerando o escopo do projeto, não vi a necessidade de criar um modelo a mais. Decisão tomada pois, na plataforma, o auditor (que mais se beneficiaria dessa estrutura) só tem acesso aos relatórios predeterminados na AV1 e nada mais.
+- Formato `gc_live_<prefixo>_<segredo>`: o prefixo permite achar a chave sem varrer a tabela e aparece nas listagens; o segredo nunca é recuperável.
+- Escopos mínimos (`traceability:read`, `batches:write`, `reports:request`): o parceiro recebe só o que a integração precisa.
+- **Isolamento:** toda consulta pública é filtrada pela organização da chave, e recurso de outra organização responde `404` (e não `403`), para não confirmar que ele existe. O histórico de análises da API pública só devolve relatórios cujo parâmetro `orgId` é o da chave; **relatórios globais não são expostos a parceiros**.
+- JWT interno e chave de API são mecanismos separados: um não substitui o outro.
 
-### 8. Tabela de configurações globais não é 1 para 1 com o usuário
+### 7. Limite de requisições por chave
 
-A tabela de configurações globais **não** é uma relação 1 para 1 com o usuário que a alterou. Se fosse (ex.: `updatedById` único), dois administradores mexendo ao mesmo tempo na primeira criação poderiam gerar **duas configurações**. Em vez disso, a tabela possui um **id fixo** protegido por um `CHECK` no banco, o que garante uma única linha, independentemente de quem a altere. Se dois administradores tentarem criar a configuração simultaneamente, o segundo recebe `409` e a edição concorrente é protegida pelo `version`.
+`@fastify/rate-limit` com janela de 1 minuto, **contador por chave** (e não por IP, já que vários parceiros podem sair do mesmo IP) e limite configurável por chave (1 a 1000, padrão 60). Ao exceder, a API responde `429` informando o limite e o tempo de espera.
+
+### 8. Versionamento `/api/v1`
+
+Separar `/internal` de `/public` deixa claro **quem consome** cada rota e permite evoluir a API pública (contrato com terceiros) sem quebrar parceiros: mudanças incompatíveis entram em `/api/v2`.
+
+### 9. Escalabilidade
+
+Pontos que já escalam e pontos que exigiriam trabalho:
+
+| Ponto                     | Hoje                                                            | Para várias instâncias                                                                                                         |
+| :------------------------ | :-------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------- |
+| API sem estado (JWT)      | Escala horizontalmente                                          | —                                                                                                                              |
+| Workers                   | Podem ser replicados; o BullMQ distribui os jobs                | —                                                                                                                              |
+| Cron                      | Protegido por trava no Redis                                    | —                                                                                                                              |
+| **Limite de requisições** | **Contador em memória, por instância**                          | Com N instâncias o limite efetivo vira até N × o configurado. Solução: usar o armazenamento em Redis do `@fastify/rate-limit`  |
+| **Arquivos de relatório** | **Disco local (`REPORTS_DIR`); a API lê o que o worker gravou** | API e worker precisam estar na mesma máquina/volume. Solução: armazenamento compartilhado (volume de rede ou _object storage_) |
+| Análises                  | Calculadas em memória a cada execução                           | Para volumes muito maiores, agregar no banco ou de forma incremental                                                           |
 
 <br>
 
 ---
 
-## 📋 Regras de Negócio <a id="regras"></a>
+## 📋 Regras de Negócio da AV3 <a id="regras"></a>
 
-### Cadastros e vínculos
+### Eficiência operacional
 
-- **CNPJ:** validação matemática dos dígitos verificadores e unicidade (também garantida por índice único no banco). Decidi usar uma biblioteca especializada na checagem ao invés de desenvolver a função por conta própria.
-- **Contrato:** cada organização possui no máximo um contrato (opcional); a data de vencimento deve ser futura.
-- **Organização sem contrato:** pode estar ativa, mas **lotes só podem ser cadastrados** para organizações **ativas** e com **contrato válido** (não vencido).
-- **Lotes:** data de entrada não pode ser futura nem anterior a 90 dias.
-- **Último administrador:** não pode ser inativado, removido nem ter o papel rebaixado.
+Considera os lotes com **triagem concluída**. Para cada lote mede, em minutos, o **tempo total** (entrada → conclusão), a **espera em fila** (entrada → início da triagem) e o **tempo ativo** (início → conclusão). Entrega média, mediana, desvio-padrão, mínimo e máximo, agrupados globalmente, **por operador** (com `efficiencyRatioVsGlobal`, razão entre a média do operador e a global) e **por mês**. Filtros opcionais: `startDate`, `endDate` e `orgId`. Gargalos identificados:
 
-### Soft delete e hard delete
+- **Etapa:** compara o tempo médio de espera com o tempo médio de execução e aponta o maior;
+- **Operador:** média do operador acima de **média global + 1 desvio-padrão**;
+- **Lote _outlier_:** tempo total acima de **média global + 1,5 desvio-padrão**.
 
-| Entidade     | Soft delete (inativar/reativar) | Hard delete (remover) |
-| :----------- | :-----------------------------: | :-------------------: |
-| Usuário      |               ✅                |          ✅           |
-| Organização  |               ✅                |          ✅           |
-| Lote         |               ✅                |          ✅           |
-| Contrato     |                —                |          ✅           |
-| Equipamento  |                —                |          ✅           |
-| Movimentação |                —                |          ✅           |
+### Rentabilidade
 
-**Usuários, organizações e lotes são as únicas entidades com soft delete** (`PATCH /:id/deactivate` e `PATCH /:id/reactivate`, usando o campo `active`). Mesmo nelas, o **hard delete continua disponível** (`DELETE /:id`). As demais entidades possuem **apenas hard delete**.
+Considera o `estimatedValue` dos equipamentos e agrupa por **tipo**, por **estado físico dentro do tipo** e por **marca/modelo/estado**, com média, mediana, desvio-padrão, extremos e **valor médio por kg**. O resumo informa o tipo e a combinação marca/modelo mais rentáveis. Aceita o filtro `orgId`.
 
-### Cascata
+### Previsão de vida útil
 
-Inativações e deleções são feitas **em cascata**, pois tudo deve ser apagado em conjunto caso o "pai" seja extinto:
+1. Cada estado físico recebe uma **nota de saúde** (`NOVO` = 100, `BOM_ESTADO` = 85, … , `INSERVIVEL` = 0).
+2. Para cada tipo de equipamento, monta pontos **(idade, nota)** a partir de todas as movimentações com mudança de estado físico e do estado atual.
+3. Ajusta uma **regressão linear** (`simple-statistics`) e calcula o **R²**.
+4. A vida útil total é o ponto em que a reta chega a nota 0 (`-intercepto / inclinação`), limitada entre 1 e 30 anos. Se a reta não for descendente o suficiente, usa a idade média dos equipamentos já inservíveis; se também não houver, usa a maior idade observada + 2 anos (mínimo de 5).
+5. A **vida útil restante** é a total menos a idade média dos equipamentos ainda em uso, e o resultado informa o ano projetado de inservibilidade.
+6. **Calibração:** com `PATCH /analytics/predictions/{id}/evaluate` o gestor informa a vida útil real; o erro absoluto é gravado e a diferença média entre real e previsto (por tipo) é somada às previsões futuras. A versão do modelo passa de `v1` para `v1-calibrated`.
 
-- **Hard delete:** garantido pelo banco (`ON DELETE CASCADE`): remover uma organização remove seu contrato, lotes, equipamentos e movimentações; remover um lote remove seus equipamentos e movimentações, e assim por diante.
-- **Soft delete:** inativar uma organização inativa, na mesma transação, todos os seus lotes; os equipamentos de lotes inativos deixam de aparecer nas consultas e nos relatórios (é possível listá-los com `active=false`).
-- **Usuários ficam fora da cascata:** como são referenciados por quase todas as tabelas (`createdBy`, `updatedBy`, `performedBy`), a remoção definitiva de um usuário com registros vinculados é bloqueada (`409`) e a API orienta a **inativá-lo**.
-- **Reativação:** **reativar uma organização reativa todos os lotes dela**, inclusive os que tenham sido inativados individualmente antes. Mantém-se a regra simétrica à inativação: o estado do "pai" se propaga a todos os filhos.
+### Valor de recuperação
 
-### Equipamentos
-
-**Código de barras interno = `id`.** O identificador do equipamento (UUID, gerado pelo banco e único) cumpre o papel de código de barras interno. Um campo separado só duplicaria uma informação que já é única, imutável e indexada.
-
-**Status livre na criação.** Ao cadastrar um equipamento **avulso** em um lote (`POST /api/batches/:id/equipments`), o status inicial pode ser informado. Isso foi intencional: um lote que ainda está em um estado aceitável para receber novos equipamentos pode receber um equipamento que **já esteja em um estágio mais avançado** do processo; restringir o status inicial atrapalharia o uso real. Já a criação de equipamentos **junto com o lote** só permite o estado inicial (`AGUARDANDO_TRIAGEM`). O lote em si continua restringindo a adição de equipamentos: só aceita novos itens enquanto estiver em `RECEBIDO` ou `EM_TRIAGEM`.
-
-**Transição de status do equipamento permitidas** (`PATCH /api/equipments/:id/status`):
-
-| De                                                               | Para                                                             |
-| :--------------------------------------------------------------- | :--------------------------------------------------------------- |
-| `AGUARDANDO_TRIAGEM`                                             | `EM_TRIAGEM`                                                     |
-| `EM_TRIAGEM`                                                     | `AGUARDANDO_DESMONTE`, `DESCARTE_SEGURO`                         |
-| `AGUARDANDO_DESMONTE`                                            | `EM_DESMONTE`                                                    |
-| `EM_DESMONTE`                                                    | `PECAS_REAPROVEITADAS`, `MATERIAL_RECICLAVEL`, `DESCARTE_SEGURO` |
-| `PECAS_REAPROVEITADAS`, `MATERIAL_RECICLAVEL`, `DESCARTE_SEGURO` | `BAIXA_DEFINITIVA`                                               |
-
-Como o equipamento só chega a `AGUARDANDO_DESMONTE` saindo de `EM_TRIAGEM`, a regra do AV1 ("só vai para desmonte após a triagem completa") é garantida pelo próprio mapa de transições.
-
-**Estado físico:** a ordem é `NOVO → BOM_ESTADO → USADO_LEVE → USADO_MODERADO → DANIFICADO_LEVE → DANIFICADO_GRAVE → INSERVIVEL`. Quando o estado cai **duas ou mais categorias**, a **justificativa textual é obrigatória**.
-
-**Movimentações automáticas:** toda mudança de status ou de estado físico gera automaticamente uma movimentação, na mesma transação da atualização. Não existe rota para criar movimentações manualmente.
-
-**Histórico imutável (por isso `Movement` não possui `version`).** Uma movimentação nunca é editada: ela só é inserida (e, no máximo, removida). Como não há atualização, não há conflito de escrita a controlar, então o campo de versionamento otimista seria inútil. A imutabilidade é imposta por um trigger no banco.
-
-### Status do lote
-
-O lote avança de forma linear: `RECEBIDO → EM_TRIAGEM → TRIAGEM_CONCLUIDA → ENCAMINHADO → FINALIZADO`. Além da ordem, a mudança de status só é permitida se os equipamentos do lote respeitarem uma **regra mínima** (função `assertBatchStatusRules`).
-
-Os status posteriores a `EM_DESMONTE` (`PECAS_REAPROVEITADAS`, `MATERIAL_RECICLAVEL`, `DESCARTE_SEGURO` e `BAIXA_DEFINITIVA`) são considerados **destinos finais**, pois são eles que levam o lote a `ENCAMINHADO` ou `FINALIZADO`. Um lote `RECEBIDO` não pode ter equipamentos que tenham avançado dos estados iniciais do processo.
-
-| Status do lote      | Regra mínima para os equipamentos                                                 |
-| :------------------ | :-------------------------------------------------------------------------------- |
-| `RECEBIDO`          | Nenhum equipamento em destino final                                               |
-| `EM_TRIAGEM`        | Nenhum equipamento ainda em `AGUARDANDO_TRIAGEM`                                  |
-| `TRIAGEM_CONCLUIDA` | Nenhum equipamento em `AGUARDANDO_TRIAGEM` ou `EM_TRIAGEM`                        |
-| `ENCAMINHADO`       | Nenhum equipamento em `AGUARDANDO_TRIAGEM`, `EM_TRIAGEM` ou `AGUARDANDO_DESMONTE` |
-| `FINALIZADO`        | Todos em destino final (nenhum em triagem, aguardando desmonte ou em desmonte)    |
-
-Além disso, **um lote sem equipamentos não pode mudar de status**: é exigido pelo menos um equipamento para sair de `RECEBIDO`. Essa verificação é explícita porque `some` aplicado a uma lista vazia retorna `false` (nenhum violador) e, sem ela, um lote vazio poderia avançar até `FINALIZADO`.
-
-**Por que `some`?** As regras são escritas com `Array.some`: para que o status de um lote seja alterado, **todos** os equipamentos precisam respeitar a regra mínima, e `some` procura justamente por **ao menos um equipamento que a viole**. Como retorna `true` ou `false`, é perfeito para essa validação: se existir um violador, a mudança é bloqueada com uma mensagem explicando o motivo.
-
-### Relatórios (`/api/reports`, ADMIN e AUDITOR)
-
-- `GET /api/reports/organizations/:id?start=&end=` — total de lotes e equipamentos de uma organização no período;
-- `GET /api/reports/equipments-by-status?status=` — equipamentos por status de rastreamento;
-- `GET /api/reports/financial` — receita mensal bruta dos contratos válidos, impostos, receita líquida e coeficiente de depreciação (valores vindos das configurações globais).
+Definido na seção de decisões (item 3) e recalculado quando muda o tipo, a marca, o modelo, o ano de fabricação ou o estado físico do equipamento.
 
 <br>
 
@@ -498,75 +462,80 @@ Além disso, **um lote sem equipamentos não pode mudar de status**: é exigido 
 
 ## 🗄️ Banco de Dados <a id="banco"></a>
 
-O schema (`prisma/schema.prisma`) define os modelos `User`, `Organization`, `Contract`, `Batch`, `Equipment`, `Movement` e `SystemSetting`, com as migrations versionadas em `prisma/migrations`.
+Além dos modelos da AV2 (`User`, `Organization`, `Contract`, `Batch`, `Equipment`, `Movement`, `SystemSetting`), a AV3 adiciona `AnalyticsReport`, `Prediction`, `ApiKey` e `ReportJob`, e a coluna `estimatedValue` em `Equipment`. As migrations estão em `prisma/migrations`.
 
 ```
-Organization 1 ── 0..1 Contract
-Organization 1 ── N Batch
-Batch        1 ── N Equipment
-Equipment    1 ── N Movement
+Organization 1 ── N ApiKey 1 ── N ReportJob
+Organization 1 ── N Batch 1 ── N Equipment 1 ── N Movement
+AnalyticsReport   (independente: histórico em JSON)
+Prediction        (independente: uma linha por previsão e tipo)
 ```
 
-> 💡 Mantive o banco de dados em português, por mais que o resto do código esteja em inglês. Essa decisão foi feita visando meu costume em montar bancos de dados nesse padrão (devido as aulas da professora Juliana).
-
-### Restrições de unicidade
-
-- `Organization.cnpj` e `User.email` únicos;
-- `Contract.orgId` único (um contrato por organização);
-- `Equipment (batchId, batchPosition)` único (posição sequencial dentro do lote).
-
-### Constraints (`CHECK`)
-
-- `version >= 0` em todos os modelos versionados;
-- contrato: vencimento posterior à assinatura e valor mensal `>= 0`;
-- equipamento: peso `> 0`, ano de fabricação `>= 1970` e posição `>= 1`;
-- configurações: alíquota entre 0 e 100, depreciação `> 0` e **id fixo** (uma única linha).
-
-### Triggers
-
-| Trigger                          | Regra imposta pelo banco                                                                                                         |
-| :------------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
-| `trg_lote_inativo_imutavel`      | Um lote inativo não pode ser alterado (apenas reativado)                                                                         |
-| `trg_equipamento_lote_ativo`     | Equipamentos não podem ser inseridos nem alterados em lote inativo (a remoção continua liberada, para o hard delete e a cascata) |
-| `trg_lote_data_entrada`          | A data de entrada do lote não pode ser futura nem anterior a 90 dias                                                             |
-| `trg_movimentacao_justificativa` | Queda de duas ou mais categorias no estado físico exige justificativa                                                            |
-| `trg_movimentacao_imutavel`      | Movimentações não podem ser alteradas (histórico imutável)                                                                       |
-
-Essas regras também são validadas nos _services_ (para devolver mensagens claras ao usuário); o banco atua como **rede de segurança**, impedindo que estados inconsistentes sejam persistidos mesmo que a regra seja burlada.
+Os nomes de tabelas e colunas seguem em português (`chave_api`, `tarefa_relatorio`, `relatorio_analitico`, `previsao_vida_util`), como na AV2. Os triggers e _constraints_ da AV2 continuam valendo; em particular, **a data de entrada de um lote não pode ser anterior a 90 dias**, o que limita o histórico que o seed e os testes conseguem criar.
 
 <br>
 
 ---
 
-## 🔐 Segurança e Credenciais Fixas <a id="seguranca"></a>
+## ⚠️ Limitações conhecidas <a id="limitacoes"></a>
 
-- Senhas são armazenadas com **bcrypt** (substituindo o SHA-256 do CLI, conforme previsto nas considerações da AV1); o texto puro nunca é persistido nem retornado pela API.
-- Os arquivos **`.env.example` e `docker-compose.yml` possuem credenciais fixas** (usuário e senha do PostgreSQL e um `JWT_SECRET` de exemplo) e os usuários do seed têm senhas conhecidas, documentadas acima. Isso foi feito **exclusivamente para facilitar a avaliação e a execução local**. Em um ambiente real, essas credenciais devem ser trocadas, o `.env` real não deve ser versionado (já está no `.gitignore`) e os segredos devem vir de um cofre ou de variáveis protegidas do servidor.
+Itens identificados na revisão do código e **não corrigidos** nesta entrega, em ordem de importância:
+
+### 1. Calibração da vida útil compara com a previsão já calibrada
+
+A previsão gravada em `Prediction.predictedLifespanYears` é o valor **já calibrado** (bruto + ajuste). Ao avaliar essa previsão, o erro é medido contra um valor que **já contém a correção da rodada anterior**, e a rodada seguinte calcula o ajuste como a **média** desses erros, que misturam bases diferentes (a primeira avaliação é sobre um valor bruto; as seguintes, sobre valores corrigidos). Na prática, parte do mesmo erro é contada duas vezes e o ajuste oscila em vez de convergir para a vida útil real. **A partir da segunda rodada de calibração, as previsões devem ser lidas como estimativas aproximadas.**
+
+_Exemplo:_ o modelo bruto prevê 8 anos e a vida útil real é 10. A rodada 1 mede erro de +2. A rodada 2 soma +2 e prevê 10, acertando; ao ser avaliada, mede erro de 0. A rodada 3 passa a usar a média (+2 e 0) = +1 e volta a prever 9, piorando uma previsão que já estava correta.
+
+**Correção proposta:** gravar também a previsão **bruta** em `Prediction` (nova coluna) e calcular o viés sempre sobre ela, ou usar uma média móvel exponencial do viés.
+
+### 2. `webhookUrl` aceita qualquer destino (risco de SSRF)
+
+O parceiro informa a URL e **o servidor** faz a requisição. O schema valida apenas que é uma URL, de modo que um parceiro mal-intencionado poderia apontar para `http://localhost:6379`, para a rede interna ou para endereços de metadados de nuvem, fazendo o worker enviar requisições a recursos que só ele alcança (_Server-Side Request Forgery_). Além disso, a chamada não tem _timeout_ e segue redirecionamentos.
+
+**Mitigações propostas:** aceitar somente `https`; resolver o DNS e **bloquear endereços privados, _loopback_ e _link-local_**; não seguir redirecionamentos (`redirect: "manual"`); definir _timeout_ curto; opcionalmente cadastrar o domínio permitido na chave de API e assinar o corpo do webhook (HMAC) para o parceiro validar a origem.
+
+### 3. Escalabilidade com várias instâncias
+
+Limite de requisições em memória e arquivos de relatório em disco local (detalhes na tabela do item 9 das decisões).
+
+### 4. Outros pontos
+
+- Equipamentos criados pela API **antes** da introdução do cálculo de `estimatedValue` continuam com o valor nulo e ficam fora da rentabilidade até serem atualizados.
+- A trava do agendador expira em 5 minutos e não é liberada ao fim da execução; se a análise noturna demorar mais que isso, outra instância poderia iniciá-la.
+- O webhook não é reenviado em caso de falha (_best effort_).
+- A pasta `storage/` (relatórios gerados) fica fora do versionamento (já está no `.gitignore`).
 
 <br>
 
 ---
 
-## 📝 Considerações Finais <a id="conclusao"></a>
+## 🔐 Segurança e Credenciais Fixas
 
-A migração do CLI para o servidor manteve o núcleo do domínio e o reposicionou em uma arquitetura em camadas: as regras de negócio permaneceram isoladas e foram apenas conectadas a uma interface HTTP, enquanto a persistência passou a ser responsabilidade exclusiva dos repositórios.
+- Senhas de usuários: **bcrypt**. Chaves de API: **SHA-256** (veja o item 3 das decisões); o texto puro da chave só existe na resposta da emissão.
+- Os arquivos **`.env.example` e `docker-compose.yml` possuem credenciais fixas** (PostgreSQL, `JWT_SECRET` de exemplo, Redis sem senha) e os usuários do seed têm senhas conhecidas. Isso foi feito **exclusivamente para facilitar a avaliação e a execução local**. Em um ambiente real, as credenciais devem ser trocadas, o `.env` não deve ser versionado (já está no `.gitignore`), o Redis deve exigir senha e não ficar exposto, e os segredos devem vir de um cofre ou de variáveis protegidas.
 
-| Decisão                                              | Alternativa considerada                | Por que a escolha atual                                       |
-| :--------------------------------------------------- | :------------------------------------- | :------------------------------------------------------------ |
-| `version` otimista em cada modelo                    | Bloqueio pessimista                    | Menor custo e sem travar registros; conflitos viram `409`     |
-| `tokenVersion` no usuário                            | Blacklist de tokens / sessões em banco | Um inteiro resolve logout e invalidação sem tabela que cresce |
-| `createdBy`/`updatedBy` + histórico de movimentações | Tabela de auditoria genérica           | Auditor só acessa relatórios; tabela de logs seria _overkill_ |
-| Código de barras = `id`                              | Campo separado de código de barras     | Evita duplicar um identificador já único e imutável           |
-| Singleton com id fixo nas configurações              | `updatedById` único                    | Impede duas configurações por concorrência na criação         |
-| Validação no service + trigger no banco              | Apenas um dos dois                     | Mensagens amigáveis na API e integridade garantida no banco   |
-| Monólito em camadas                                  | Microsserviços                         | Simplicidade de implantação e depuração no estágio atual      |
+<br>
 
-**Evolução natural:** os repositórios isolados permitem trocar a ORM ou o banco sem tocar nas regras; os controllers finos permitem expor as mesmas regras por outro canal (CLI, mensageria); e o front-end SPA pode consumir a API diretamente a partir da documentação em `/docs`.
+---
+
+## 📝 Considerações Finais
+
+| Decisão                                            | Alternativa considerada                 | Por que a escolha atual                                                         |
+| :------------------------------------------------- | :-------------------------------------- | :------------------------------------------------------------------------------ |
+| Módulo `analytics` autocontido                     | Espalhar pelas camadas globais          | Baixo acoplamento, um só código para rota, worker e cron, extração futura fácil |
+| simple-statistics                                  | SQL estatístico / fórmulas manuais / ML | Simples, tipada, suficiente e fácil de explicar                                 |
+| `AnalyticsReport` em JSON, `Prediction` relacional | Tudo relacional ou tudo JSON            | Cada estrutura segue o seu uso (histórico lido inteiro × dado consultado)       |
+| Hash SHA-256 da chave de API                       | Guardar a chave / usar bcrypt           | Segredo irrecuperável e verificação rápida a cada requisição                    |
+| BullMQ + worker separado                           | Processar na requisição / fila própria  | Resposta imediata, retentativas prontas, escala independente                    |
+| 3 tentativas, backoff exponencial de 2 s           | Mais tentativas / intervalo fixo        | Cobre falhas transitórias sem demorar a sinalizar falhas permanentes            |
+| Limite por chave                                   | Limite por IP                           | Parceiros diferentes podem compartilhar IP                                      |
+| `/api/v1/internal` × `/api/v1/public`              | Rotas sem versão                        | Contrato externo estável e evolução sem quebrar parceiros                       |
+
+**Evolução natural:** corrigir as limitações acima (calibração, SSRF, _rate limit_ e arquivos compartilhados), acrescentar testes automatizados unitários para os cálculos estatísticos e expor as análises em um painel.
 
 <br>
 
 ---
 
 <sub>Taís Souza · 2º DSM · Fatec SJC · 2026-2</sub>
-
----
