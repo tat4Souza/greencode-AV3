@@ -31,6 +31,7 @@ export function createEquipment(
   data: Omit<CreateEquipmentInput, "batchPosition"> & {
     batchId: string;
     createdById: string;
+    estimatedValue?: number;
   },
 ) {
   return prisma.$transaction(async (tx) => {
@@ -78,7 +79,7 @@ export function findEquipmentById(id: string) {
 export async function updateEquipment(
   id: string,
   version: number,
-  data: Omit<UpdateEquipmentInput, "version">,
+  data: Omit<UpdateEquipmentInput, "version"> & { estimatedValue?: number },
   updatedById: string,
 ) {
   const result = await prisma.equipment.updateMany({

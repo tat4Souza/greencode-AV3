@@ -25,6 +25,7 @@ type ApplyMovementData = {
   version: number;
   newStatus?: TrackingStatus;
   newPhysicalState?: PhysicalState;
+  estimatedValue?: number;
   movement: {
     origin: string;
     destination: string;
@@ -39,7 +40,14 @@ type ApplyMovementData = {
 };
 
 export function applyMovement(data: ApplyMovementData) {
-  const { equipmentId, version, newStatus, newPhysicalState, movement } = data;
+  const {
+    equipmentId,
+    version,
+    newStatus,
+    newPhysicalState,
+    estimatedValue,
+    movement,
+  } = data;
 
   return prisma.$transaction(async (tx) => {
     const result = await tx.equipment.updateMany({
@@ -47,6 +55,7 @@ export function applyMovement(data: ApplyMovementData) {
       data: {
         ...(newStatus && { status: newStatus }),
         ...(newPhysicalState && { physicalState: newPhysicalState }),
+        ...(estimatedValue !== undefined && { estimatedValue }),
         version: { increment: 1 },
       },
     });

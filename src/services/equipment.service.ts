@@ -9,7 +9,7 @@ import {
   isPrismaError,
   notFound,
 } from "../lib/errors.js";
-import { assertBatchStatusRules } from "../lib/validators.js";
+import { estimateRecoveryValue } from "../lib/valuation.js";
 import { findBatchById } from "../repositories/batch.repository.js";
 import {
   createEquipment,
@@ -43,7 +43,12 @@ export async function registerEquipment(
   }
 
   try {
-    return await createEquipment({ ...input, batchId, createdById });
+    return await createEquipment({
+      ...input,
+      batchId,
+      createdById,
+      estimatedValue: estimateRecoveryValue(input),
+    });
   } catch (e) {
     if (isPrismaError(e, "P2002"))
       throw conflict("Posição já cadastrada neste lote");
@@ -86,7 +91,21 @@ export async function updateEquipamentById(
     throw badRequest("É necessário passar o conteúdo a ser editado");
 
   try {
-    const count = await updateEquipment(id, version, changes, updatedBy);
+    const estimatedValue = estimateRecoveryValue({
+      type: changes.type ?? equipment.type,
+      brand: changes.brand ?? equipment.brand,
+      model: changes.model ?? equipment.model,
+      manufacturingYear:
+        changes.manufacturingYear ?? equipment.manufacturingYear,
+      physicalState: equipment.physicalState,
+    });
+
+    const count = await updateEquipment(
+      id,
+      version,
+      { ...changes, estimatedValue },
+      updatedBy,
+    );
     if (count === 0) {
       throw conflict(
         "Equipamento já foi alterado por outra pessoa. Recarregue os dados.",
@@ -182,6 +201,15 @@ export async function changeEquipmentState(
     version,
     newStatus,
     newPhysicalState,
+    ...(newPhysicalState && {
+      estimatedValue: estimateRecoveryValue({
+        type: equipment.type,
+        brand: equipment.brand,
+        model: equipment.model,
+        manufacturingYear: equipment.manufacturingYear,
+        physicalState: newPhysicalState,
+      }),
+    }),
     movement: {
       origin: rest.origin ?? equipment.status,
       destination: rest.destination ?? newStatus ?? equipment.status,

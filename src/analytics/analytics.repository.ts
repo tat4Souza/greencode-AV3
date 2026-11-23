@@ -56,9 +56,16 @@ export function saveAnalyticsReport(data: {
   });
 }
 
-export function findAnalyticsReports(type?: ReportType, limit = 20) {
+export function findAnalyticsReports(
+  type?: ReportType,
+  limit = 20,
+  orgId?: string,
+) {
   return prisma.analyticsReport.findMany({
-    where: type ? { type } : undefined,
+    where: {
+      ...(type ? { type } : {}),
+      ...(orgId ? { params: { path: ["orgId"], equals: orgId } } : {}),
+    },
     orderBy: { generatedAt: "desc" },
     take: limit,
   });

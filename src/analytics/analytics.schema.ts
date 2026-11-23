@@ -18,17 +18,40 @@ export const runEfficiencyInputSchema = z
   );
 
 export const listReportsQuerySchema = z.object({
-  type: z.enum(ReportType).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  type: z
+    .enum(ReportType)
+    .optional()
+    .meta({
+      description:
+        "Filtra pelo tipo de análise: EFICIENCIA, RENTABILIDADE ou VIDA_UTIL.",
+      example: "RENTABILIDADE",
+    }),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(20)
+    .meta({
+      description: "Quantidade máxima de relatórios (1 a 100), do mais recente para o mais antigo.",
+      example: 20,
+    }),
 });
 
 export const analyticsReportResponseSchema = z.object({
   id: z.uuid(),
   type: z.enum(ReportType),
-  params: z.unknown().nullable(),
-  result: z.unknown(),
-  modelVersion: z.string(),
-  generatedAt: z.date(),
+  params: z
+    .unknown()
+    .nullable()
+    .meta({ description: "Parâmetros usados na geração (filtros e organização)." }),
+  result: z
+    .unknown()
+    .meta({ description: "Resultado da análise (estatísticas, comparações e projeções)." }),
+  modelVersion: z
+    .string()
+    .meta({ description: "Versão do modelo que gerou o resultado.", example: "v1" }),
+  generatedAt: z.date().meta({ description: "Momento em que o relatório foi gerado." }),
 });
 
 export const runProfitabilityInputSchema = z.object({

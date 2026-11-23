@@ -11,6 +11,13 @@ const PASSWORD = "Teste@1234";
 
 type Res = { status: number; data: any };
 
+function v1Path(path: string): string {
+  if (!path.startsWith("/api/") || path.startsWith("/api/v1/")) return path;
+  return /^\/api\/(auth|easteregg)(\/|$|\?)/.test(path)
+    ? path.replace("/api/", "/api/v1/")
+    : path.replace("/api/", "/api/v1/internal/");
+}
+
 const useColor = process.stdout.isTTY && !process.env["NO_COLOR"];
 const paint = (code: number, text: string) =>
   useColor ? `\x1b[${code}m${text}\x1b[0m` : text;
@@ -27,11 +34,12 @@ async function call(
   path: string,
   opts: {
     token?: string;
+    apiKey?: string;
     body?: unknown;
     query?: Record<string, string | number | boolean>;
   } = {},
 ): Promise<Res> {
-  const url = new URL(BASE_URL + path);
+  const url = new URL(BASE_URL + v1Path(path));
   for (const [key, value] of Object.entries(opts.query ?? {})) {
     url.searchParams.set(key, String(value));
   }
@@ -39,6 +47,7 @@ async function call(
   const headers: Record<string, string> = {};
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   if (opts.token) headers["authorization"] = `Bearer ${opts.token}`;
+  if (opts.apiKey) headers["x-api-key"] = opts.apiKey;
 
   const response = await fetch(url, {
     method,
@@ -67,6 +76,10 @@ function expectStatus(
   route: string,
   extra?: (res: Res) => string | undefined,
 ): Res {
+  route = route.replace(
+    /^(\S+) (\/api\/\S*)/,
+    (_m, verb: string, p: string) => `${verb} ${v1Path(p)}`,
+  );
   const accepted = Array.isArray(expected) ? expected : [expected];
   let problem: string | undefined;
 
@@ -912,7 +925,524 @@ async function main() {
     "GET /api/reports/financial",
   );
 
-  section("11. Soft delete (inativar/reativar) e cascata");
+  section("11. Análises internas: eficiência, rentabilidade e vida útil (AV3)");
+
+  const ANALYTICS = "/api/v1/internal/analytics";
+
+  expectStatus(
+    "Análises exigem autenticação",
+    await call("POST", `${ANALYTICS}/efficiency`, { body: {} }),
+    401,
+    `POST ${ANALYTICS}/efficiency`,
+  );
+
+  expectStatus(
+    "OPERADOR não executa análises",
+    await call("POST", `${ANALYTICS}/efficiency`, {
+      token: operador,
+      body: {},
+    }),
+    403,
+    `POST ${ANALYTICS}/efficiency`,
+  );
+
+  const analysisRuns: {
+    path: string;
+    type: string;
+    check: (r: Res) => string | undefined;
+  }[] = [
+    {
+      path: "efficiency",
+      type: "EFICIENCIA",
+      check: (r) =>
+        Array.isArray(r.data?.result?.byOperator)
+          ? undefined
+          : "resultado sem a comparação por operador",
+    },
+    {
+      path: "profitability",
+      type: "RENTABILIDADE",
+      check: (r) =>
+        Array.isArray(r.data?.result?.byEquipmentType)
+          ? undefined
+          : "resultado sem o agrupamento por tipo de equipamento",
+    },
+    {
+      path: "lifespan",
+      type: "VIDA_UTIL",
+      check: (r) =>
+        Array.isArray(r.data?.result?.projectionsByType)
+          ? undefined
+          : "resultado sem as projeções por tipo de equipamento",
+    },
+  ];
+
+  let lifespanRun: Res | undefined;
+  for (const run of analysisRuns) {
+    const r = expectStatus(
+      `Auditor executa a análise ${run.type} e o resultado é gravado`,
+      await call("POST", `${ANALYTICS}/${run.path}`, {
+        token: auditor,
+        body: {},
+      }),
+      201,
+      `POST ${ANALYTICS}/${run.path}`,
+      (res) =>
+        res.data?.type !== run.type
+          ? `tipo esperado ${run.type}, recebido ${res.data?.type}`
+          : run.check(res),
+    );
+    if (run.path === "lifespan") lifespanRun = r;
+  }
+
+  expectStatus(
+    "Histórico lista os relatórios gerados e respeita o filtro de tipo",
+    await call("GET", `${ANALYTICS}/reports`, {
+      token: auditor,
+      query: { type: "EFICIENCIA", limit: 5 },
+    }),
+    200,
+    `GET ${ANALYTICS}/reports?type=EFICIENCIA`,
+    (r) =>
+      Array.isArray(r.data) &&
+      r.data.length > 0 &&
+      r.data.every((item: any) => item.type === "EFICIENCIA")
+        ? undefined
+        : "histórico vazio ou com tipo diferente do filtro",
+  );
+
+  const predictionId: string | undefined =
+    lifespanRun?.data?.result?.projectionsByType?.[0]?.predictionId;
+  if (predictionId) {
+    expectStatus(
+      "Gestor registra a vida útil real e o erro da previsão é calculado",
+      await call("PATCH", `${ANALYTICS}/predictions/${predictionId}/evaluate`, {
+        token: gestor,
+        body: { actualLifespanYears: 8 },
+      }),
+      200,
+      `PATCH ${ANALYTICS}/predictions/:id/evaluate`,
+      (r) =>
+        typeof r.data?.errorYears === "number"
+          ? undefined
+          : "errorYears não foi calculado",
+    );
+  }
+
+  section(
+    "12. API pública: chaves, escopos, isolamento, limite e relatórios assíncronos (AV3)",
+  );
+
+  const API_KEYS = "/api/v1/internal/api-keys";
+  const PUBLIC = "/api/v1/public";
+
+  const newPartner = async (label: string) => {
+    const r = expectStatus(
+      `Cadastra o parceiro ${label} com contrato válido`,
+      await call("POST", "/api/organizations", {
+        token: operador,
+        body: orgBody({
+          name: `Parceiro ${label} ${RUN}`,
+          contract: contractBody(),
+        }),
+      }),
+      201,
+      "POST /api/organizations",
+    );
+    critical(r, `cadastro do parceiro ${label}`);
+    return r.data as { id: string };
+  };
+  const partner1 = await newPartner("P1");
+  const partner2 = await newPartner("P2");
+
+  const issueKey = async (
+    description: string,
+    orgId: string,
+    scopes: string[],
+    rateLimitPerMin = 60,
+  ) => {
+    const r = expectStatus(
+      description,
+      await call("POST", API_KEYS, {
+        token: admin,
+        body: { orgId, name: `Chave de teste ${RUN}`, scopes, rateLimitPerMin },
+      }),
+      201,
+      `POST ${API_KEYS}`,
+      (res) =>
+        typeof res.data?.plainKey === "string" &&
+        res.data.plainKey.startsWith("gc_live_")
+          ? undefined
+          : "plainKey ausente ou com formato inesperado",
+    );
+    critical(r, description);
+    return { id: r.data.id as string, plainKey: r.data.plainKey as string };
+  };
+
+  const keyFull = await issueKey(
+    "Admin emite chave completa (leitura, escrita e relatórios) para P1",
+    partner1.id,
+    ["traceability:read", "batches:write", "reports:request"],
+    200,
+  );
+  const keyRead = await issueKey(
+    "Admin emite chave somente de leitura para P1",
+    partner1.id,
+    ["traceability:read"],
+  );
+  const keyP2 = await issueKey(
+    "Admin emite chave para o parceiro P2",
+    partner2.id,
+    ["traceability:read", "reports:request"],
+  );
+  const keyLimited = await issueKey(
+    "Admin emite chave com limite de 3 requisições por minuto",
+    partner1.id,
+    ["traceability:read"],
+    3,
+  );
+
+  expectStatus(
+    "Escopo inexistente é rejeitado na emissão da chave",
+    await call("POST", API_KEYS, {
+      token: admin,
+      body: { orgId: partner1.id, name: "Inválida", scopes: ["admin:all"] },
+    }),
+    400,
+    `POST ${API_KEYS}`,
+  );
+
+  expectStatus(
+    "Só o ADMIN emite chaves de API",
+    await call("POST", API_KEYS, {
+      token: gestor,
+      body: {
+        orgId: partner1.id,
+        name: "Sem permissão",
+        scopes: ["traceability:read"],
+      },
+    }),
+    403,
+    `POST ${API_KEYS}`,
+  );
+
+  expectStatus(
+    "Chave para organização inexistente é rejeitada",
+    await call("POST", API_KEYS, {
+      token: admin,
+      body: {
+        orgId: crypto.randomUUID(),
+        name: "Sem organização",
+        scopes: ["traceability:read"],
+      },
+    }),
+    404,
+    `POST ${API_KEYS}`,
+  );
+
+  expectStatus(
+    "A listagem de chaves nunca expõe o segredo nem o hash",
+    await call("GET", API_KEYS, {
+      token: admin,
+      query: { orgId: partner1.id },
+    }),
+    200,
+    `GET ${API_KEYS}?orgId=`,
+    (r) => {
+      const raw = JSON.stringify(r.data);
+      if (raw.includes(keyFull.plainKey))
+        return "a listagem expôs a chave completa";
+      if (raw.includes("keyHash")) return "a listagem expôs o hash da chave";
+      return Array.isArray(r.data) && r.data.length >= 3
+        ? undefined
+        : "esperadas ao menos 3 chaves do parceiro P1";
+    },
+  );
+
+  expectStatus(
+    "Rota pública sem chave de API é rejeitada",
+    await call("GET", `${PUBLIC}/analytics/reports`),
+    401,
+    `GET ${PUBLIC}/analytics/reports`,
+  );
+
+  expectStatus(
+    "Chave de API inválida é rejeitada",
+    await call("GET", `${PUBLIC}/analytics/reports`, {
+      apiKey: "gc_live_deadbeef_00000000000000000000000000000000",
+    }),
+    401,
+    `GET ${PUBLIC}/analytics/reports`,
+  );
+
+  expectStatus(
+    "Token JWT interno não substitui a chave de API",
+    await call("GET", `${PUBLIC}/analytics/reports`, { token: admin }),
+    401,
+    `GET ${PUBLIC}/analytics/reports`,
+  );
+
+  expectStatus(
+    "Chave sem o escopo batches:write não submete lotes",
+    await call("POST", `${PUBLIC}/batches`, {
+      apiKey: keyRead.plainKey,
+      body: { invoice: "NF-SEM-ESCOPO", carrier: "TransTeste" },
+    }),
+    403,
+    `POST ${PUBLIC}/batches`,
+  );
+
+  expectStatus(
+    "Chave sem o escopo reports:request não solicita relatórios",
+    await call("POST", `${PUBLIC}/reports`, {
+      apiKey: keyRead.plainKey,
+      body: { type: "EFICIENCIA" },
+    }),
+    403,
+    `POST ${PUBLIC}/reports`,
+  );
+
+  const submitted = expectStatus(
+    "Parceiro submete um lote com equipamento pela API pública",
+    await call("POST", `${PUBLIC}/batches`, {
+      apiKey: keyFull.plainKey,
+      body: {
+        invoice: `NF-PUB-${RUN}`,
+        carrier: "TransTeste",
+        equipments: [equipmentBody()],
+      },
+    }),
+    201,
+    `POST ${PUBLIC}/batches`,
+    (r) =>
+      r.data?.org?.id === partner1.id &&
+      Array.isArray(r.data?.equipments) &&
+      r.data.equipments.length === 1
+        ? undefined
+        : "o lote não foi vinculado à organização dona da chave",
+  );
+  critical(submitted, "submissão do lote pela API pública");
+  const publicBatchId: string = submitted.data.id;
+  const publicEquipmentId: string = submitted.data.equipments[0].id;
+
+  expectStatus(
+    "Lote público sem nota fiscal é rejeitado",
+    await call("POST", `${PUBLIC}/batches`, {
+      apiKey: keyFull.plainKey,
+      body: { carrier: "TransTeste" },
+    }),
+    400,
+    `POST ${PUBLIC}/batches`,
+  );
+
+  expectStatus(
+    "O valor de recuperação é calculado pela API (equipamento entra na rentabilidade)",
+    await call("POST", `${ANALYTICS}/profitability`, {
+      token: auditor,
+      body: { orgId: partner1.id },
+    }),
+    201,
+    `POST ${ANALYTICS}/profitability`,
+    (r) =>
+      (r.data?.result?.summary?.totalEquipmentsAnalyzed ?? 0) >= 1
+        ? undefined
+        : "nenhum equipamento analisado: estimatedValue não foi preenchido",
+  );
+
+  expectStatus(
+    "Rastreabilidade do lote com chave de leitura",
+    await call("GET", `${PUBLIC}/batches/${publicBatchId}/traceability`, {
+      apiKey: keyRead.plainKey,
+    }),
+    200,
+    `GET ${PUBLIC}/batches/:id/traceability`,
+    (r) =>
+      Array.isArray(r.data?.equipments) && r.data.equipments.length === 1
+        ? undefined
+        : "equipamentos do lote não retornados",
+  );
+
+  expectStatus(
+    "Rastreabilidade do equipamento com chave de leitura",
+    await call(
+      "GET",
+      `${PUBLIC}/equipments/${publicEquipmentId}/traceability`,
+      {
+        apiKey: keyRead.plainKey,
+      },
+    ),
+    200,
+    `GET ${PUBLIC}/equipments/:id/traceability`,
+  );
+
+  expectStatus(
+    "Parceiro P2 não enxerga o lote do parceiro P1",
+    await call("GET", `${PUBLIC}/batches/${publicBatchId}/traceability`, {
+      apiKey: keyP2.plainKey,
+    }),
+    404,
+    `GET ${PUBLIC}/batches/:id/traceability`,
+  );
+
+  expectStatus(
+    "Parceiro P2 não enxerga o equipamento do parceiro P1",
+    await call(
+      "GET",
+      `${PUBLIC}/equipments/${publicEquipmentId}/traceability`,
+      {
+        apiKey: keyP2.plainKey,
+      },
+    ),
+    404,
+    `GET ${PUBLIC}/equipments/:id/traceability`,
+  );
+
+  const reportRequest = expectStatus(
+    "Parceiro solicita relatório assíncrono de rentabilidade em CSV",
+    await call("POST", `${PUBLIC}/reports`, {
+      apiKey: keyFull.plainKey,
+      body: { type: "RENTABILIDADE", format: "csv" },
+    }),
+    202,
+    `POST ${PUBLIC}/reports`,
+    (r) =>
+      typeof r.data?.id === "string" ? undefined : "id da tarefa não retornado",
+  );
+  critical(reportRequest, "solicitação do relatório assíncrono");
+  const jobId: string = reportRequest.data.id;
+
+  let jobStatus = "NA_FILA";
+  for (
+    let i = 0;
+    i < 30 && jobStatus !== "CONCLUIDO" && jobStatus !== "FALHOU";
+    i++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const poll = await call("GET", `${PUBLIC}/reports/${jobId}`, {
+      apiKey: keyFull.plainKey,
+    });
+    jobStatus = poll.data?.status ?? jobStatus;
+  }
+
+  expectStatus(
+    "Worker processa a tarefa (exige Redis e o worker em execução: npm run worker:dev)",
+    await call("GET", `${PUBLIC}/reports/${jobId}`, {
+      apiKey: keyFull.plainKey,
+    }),
+    200,
+    `GET ${PUBLIC}/reports/:id`,
+    (r) =>
+      r.data?.status === "CONCLUIDO"
+        ? undefined
+        : `status final ${r.data?.status} após 30 s; confira se o worker está rodando`,
+  );
+
+  expectStatus(
+    "Parceiro baixa o relatório CSV gerado",
+    await call("GET", `${PUBLIC}/reports/${jobId}/download`, {
+      apiKey: keyFull.plainKey,
+    }),
+    200,
+    `GET ${PUBLIC}/reports/:id/download`,
+    (r) =>
+      typeof r.data === "string" && r.data.includes(";")
+        ? undefined
+        : "o download não devolveu um CSV com separador ';'",
+  );
+
+  expectStatus(
+    "Parceiro P2 não enxerga a tarefa do parceiro P1",
+    await call("GET", `${PUBLIC}/reports/${jobId}`, {
+      apiKey: keyP2.plainKey,
+    }),
+    404,
+    `GET ${PUBLIC}/reports/:id`,
+  );
+
+  expectStatus(
+    "Parceiro P1 vê somente relatórios da própria organização",
+    await call("GET", `${PUBLIC}/analytics/reports`, {
+      apiKey: keyRead.plainKey,
+    }),
+    200,
+    `GET ${PUBLIC}/analytics/reports`,
+    (r) => {
+      if (!Array.isArray(r.data)) return "resposta não é uma lista";
+      if (r.data.some((item: any) => item.params?.orgId !== partner1.id)) {
+        return "a listagem trouxe relatório global ou de outra organização";
+      }
+      return jobStatus !== "CONCLUIDO" || r.data.length > 0
+        ? undefined
+        : "o relatório solicitado não apareceu no histórico";
+    },
+  );
+
+  expectStatus(
+    "Parceiro P2 não recebe relatórios do parceiro P1",
+    await call("GET", `${PUBLIC}/analytics/reports`, {
+      apiKey: keyP2.plainKey,
+    }),
+    200,
+    `GET ${PUBLIC}/analytics/reports`,
+    (r) =>
+      Array.isArray(r.data) &&
+      r.data.every((item: any) => item.params?.orgId === partner2.id)
+        ? undefined
+        : "a listagem trouxe relatório global ou de outra organização",
+  );
+
+  const limitedUrl = `${PUBLIC}/batches/${publicBatchId}/traceability`;
+  for (let i = 1; i <= 3; i++) {
+    expectStatus(
+      `Chave com limite de 3 req/min: requisição ${i} é aceita`,
+      await call("GET", limitedUrl, { apiKey: keyLimited.plainKey }),
+      200,
+      `GET ${PUBLIC}/batches/:id/traceability`,
+    );
+  }
+  expectStatus(
+    "Chave com limite de 3 req/min: a 4ª requisição recebe 429",
+    await call("GET", limitedUrl, { apiKey: keyLimited.plainKey }),
+    429,
+    `GET ${PUBLIC}/batches/:id/traceability`,
+  );
+
+  expectStatus(
+    "Admin revoga a chave de leitura",
+    await call("PATCH", `${API_KEYS}/${keyRead.id}/revoke`, { token: admin }),
+    [200, 204],
+    `PATCH ${API_KEYS}/:id/revoke`,
+  );
+
+  expectStatus(
+    "Chave revogada deixa de funcionar imediatamente",
+    await call("GET", limitedUrl, { apiKey: keyRead.plainKey }),
+    401,
+    `GET ${PUBLIC}/batches/:id/traceability`,
+  );
+
+  expectStatus(
+    "Revogar uma chave já revogada é rejeitado",
+    await call("PATCH", `${API_KEYS}/${keyRead.id}/revoke`, { token: admin }),
+    400,
+    `PATCH ${API_KEYS}/:id/revoke`,
+  );
+
+  for (const [label, partner] of [
+    ["P1", partner1],
+    ["P2", partner2],
+  ] as const) {
+    expectStatus(
+      `Remove o parceiro ${label} (leva junto lotes e chaves de API)`,
+      await call("DELETE", `/api/organizations/${partner.id}`, {
+        token: operador,
+      }),
+      204,
+      "DELETE /api/organizations/:id",
+    );
+  }
+
+  section("13. Soft delete (inativar/reativar) e cascata");
 
   expectStatus(
     "Usuário com registros vinculados não pode ser removido (orienta inativar)",
@@ -1082,7 +1612,7 @@ async function main() {
     (r) => (r.data?.active === true ? undefined : "esperado active=true"),
   );
 
-  section("12. Hard delete (remoção definitiva) e cascata");
+  section("14. Hard delete (remoção definitiva) e cascata");
 
   expectStatus(
     "Gestor remove um equipamento",
@@ -1142,7 +1672,7 @@ async function main() {
     "GET /api/equipments/:id",
   );
 
-  section("13. Sessão, senha e ciclo de vida de usuários");
+  section("15. Sessão, senha e ciclo de vida de usuários");
 
   expectStatus(
     "Troca de senha com a senha atual incorreta é rejeitada",

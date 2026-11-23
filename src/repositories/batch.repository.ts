@@ -1,6 +1,7 @@
 import type { Prisma } from "../generated/prisma/client.js";
 import type { BatchStatus } from "../generated/prisma/enums.js";
 import { prisma } from "../lib/prisma.js";
+import { estimateRecoveryValue } from "../lib/valuation.js";
 import type {
   CreateBatchInput,
   UpdateBatchInput,
@@ -54,6 +55,7 @@ export function createBatch(data: CreateBatchInput & { createdById: string }) {
             ...e,
             batchPosition: index + 1,
             createdById: data.createdById,
+            estimatedValue: estimateRecoveryValue(e),
           })),
       },
     },

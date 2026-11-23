@@ -63,6 +63,8 @@ export async function publicApiRoutes(server: FastifyInstance) {
       schema: {
         ...publicTag,
         summary: "Consulta rastreabilidade de um lote do parceiro",
+        description:
+          "Retorna o lote e seus equipamentos, com as datas de triagem. Exige o escopo `traceability:read`. Só lotes da organização dona da chave são visíveis; qualquer outro id responde 404.",
         params: idParamsSchema,
         response: {
           200: publicBatchTraceabilitySchema,
@@ -83,6 +85,8 @@ export async function publicApiRoutes(server: FastifyInstance) {
       schema: {
         ...publicTag,
         summary: "Consulta histórico de rastreabilidade de um equipamento",
+        description:
+          "Retorna o equipamento e todas as suas movimentações. Exige o escopo `traceability:read`. Equipamentos de outras organizações respondem 404.",
         params: idParamsSchema,
         response: {
           200: publicEquipmentTraceabilitySchema,
@@ -103,6 +107,8 @@ export async function publicApiRoutes(server: FastifyInstance) {
       schema: {
         ...publicTag,
         summary: "Submete um novo lote de equipamentos para logística reversa",
+        description:
+          "Cria um lote para a organização dona da chave, opcionalmente já com os equipamentos. Exige o escopo `batches:write`. A organização precisa estar ativa e com contrato válido, e a data de entrada não pode ser futura nem anterior a 90 dias.",
         body: publicCreateBatchSchema,
         response: {
           201: batchResponseSchema,
@@ -123,6 +129,8 @@ export async function publicApiRoutes(server: FastifyInstance) {
       schema: {
         ...publicTag,
         summary: "Consulta os relatórios analíticos consolidados",
+        description:
+          "Lista o histórico de relatórios analíticos gerados para a organização da chave (por exemplo, os solicitados em POST /reports). Exige o escopo `traceability:read`.",
         querystring: listReportsQuerySchema,
         response: {
           200: z.array(analyticsReportResponseSchema),
@@ -143,6 +151,8 @@ export async function publicApiRoutes(server: FastifyInstance) {
         ...publicTag,
         summary:
           "Solicita a geração assíncrona de um relatório analítico (CSV ou JSON)",
+        description:
+          "Publica a tarefa na fila e responde imediatamente com 202 e o identificador. Acompanhe por polling em GET /reports/{id} ou informe um `webhookUrl`. Exige o escopo `reports:request`. Tarefas com falha são repetidas até 3 vezes, com espera crescente.",
         body: requestAsyncReportSchema,
         response: {
           202: reportJobResponseSchema,
@@ -163,6 +173,8 @@ export async function publicApiRoutes(server: FastifyInstance) {
         ...publicTag,
         summary:
           "Consulta o status de processamento de um relatório solicitado",
+        description:
+          "Retorna o status da tarefa (NA_FILA, PROCESSANDO, CONCLUIDO ou FALHOU). Exige o escopo `reports:request`. Só tarefas da própria chave são visíveis.",
         params: idParamsSchema,
         response: {
           200: reportJobResponseSchema,
@@ -183,6 +195,8 @@ export async function publicApiRoutes(server: FastifyInstance) {
       schema: {
         ...publicTag,
         summary: "Faz o download do arquivo de relatório quando concluído",
+        description:
+          "Devolve o arquivo (CSV com separador `;` e UTF-8 com BOM, ou JSON). Responde 400 enquanto a tarefa não estiver CONCLUIDA. Exige o escopo `reports:request`.",
         params: idParamsSchema,
       },
     },

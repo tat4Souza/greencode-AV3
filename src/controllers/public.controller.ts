@@ -55,7 +55,11 @@ export async function listPublicAnalyticsReportsHandler(
   reply: FastifyReply,
 ) {
   const { type, limit } = request.query;
-  const reports = await findAnalyticsReports(type, limit);
+  const reports = await findAnalyticsReports(
+    type,
+    limit,
+    request.apiKey!.orgId,
+  );
   return reply.send(reports);
 }
 
